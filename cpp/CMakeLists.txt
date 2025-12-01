@@ -16,9 +16,14 @@
 #
 
 cmake_minimum_required(VERSION 3.27 FATAL_ERROR)
+
+# add extra module search paths: FindXXX.cmake
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
+
+# export compile_commands.json for lsp
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# include cmake modules
 include(resolve_dirs)
 include(parse_make_options)
 include(cuda_configuration)
@@ -153,10 +158,12 @@ else()
   message(FATAL_ERROR "Failed to determine TensorRT LLM version")
 endif()
 
+# create version.h file based on the python code
 configure_file(
   cmake/templates/version.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/tensorrt_llm/executor/version.h)
 
+# enable cuda
 setup_cuda_compiler()
 
 enable_language(C CXX CUDA)
@@ -242,9 +249,11 @@ set(TRT_LIB TensorRT::NvInfer)
 
 get_filename_component(TRT_LLM_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR} PATH)
 
+# add 3rdparties
 set(3RDPARTY_DIR ${TRT_LLM_ROOT_DIR}/3rdparty)
 add_subdirectory(${3RDPARTY_DIR} 3rdparty)
 
+# start to fetch codes
 if(BINDING_TYPE STREQUAL "pybind"
    OR BUILD_DEEP_EP
    OR BUILD_DEEP_GEMM)
@@ -549,7 +558,9 @@ if(ENABLE_UCX)
   find_package(ucx)
   if(NOT ${ucx_FOUND})
     set(ENABLE_UCX 0)
+    message("DONT FIND UCX")
   else()
+    message("FOUND UCX")
     set(ucxx_source_dir ${CMAKE_BINARY_DIR}/_deps/ucxx-src)
     if(DEFINED ENV{GITHUB_MIRROR} AND NOT "$ENV{GITHUB_MIRROR}" STREQUAL "")
       if(EXISTS "${ucxx_source_dir}/fetch_rapids.cmake")
@@ -580,8 +591,8 @@ if(ENABLE_UCX)
     endif()
     find_package(ucxx REQUIRED PATHS ${CMAKE_BINARY_DIR}/ucxx/build
                  NO_DEFAULT_PATH)
+    find_package(NIXL)
   endif()
-  find_package(NIXL)
 endif()
 if(ENABLE_UCX)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DENABLE_UCX=1")

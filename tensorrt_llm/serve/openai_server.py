@@ -82,6 +82,7 @@ class OpenAIServer:
                  metadata_server_cfg: MetadataServerConfig,
                  disagg_cluster_config: Optional[DisaggClusterConfig] = None,
                  multimodal_server_config: Optional[MultimodalServerConfig] = None):
+        print(f"\033[42m Launching OpenAIServer \033[0m")
         self.llm = llm
         self.tokenizer = llm.tokenizer
         self.tool_parser = tool_parser
@@ -435,6 +436,7 @@ class OpenAIServer:
                     self.perf_metrics.append(item)
 
     async def openai_chat(self, request: ChatCompletionRequest, raw_request: Request) -> Response:
+        logger.info(f"ARSENAL LOG: {request.model_dump_json()}")
 
         def get_role() -> str:
             if request.add_generation_prompt:

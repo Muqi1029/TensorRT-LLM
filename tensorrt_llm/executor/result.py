@@ -436,7 +436,19 @@ class GenerationResultBase:
                             output.token_ids = output.token_ids[:-len(stop_ids)]
                         break
             elif finish_reasons[src_idx] == tllm.FinishReason.LENGTH:
-                output.finish_reason = 'length'
+                # FIXME(Muqi1029): fix trtllm bugs temporarily
+                if len(output.token_ids) <= self.sampling_params.max_tokens:
+                    output.finish_reason = "stop"
+                    for stop_reason, stop_ids in self.sampling_params._get_stop_reasons_and_words(
+                    ):
+                        if output.token_ids[-len(stop_ids):] == stop_ids:
+                            output.stop_reason = stop_reason
+                            if not self.sampling_params.include_stop_str_in_output:
+                                output.token_ids = output.token_ids[:-len(
+                                    stop_ids)]
+                            break
+                else:
+                    output.finish_reason = 'length'
             elif finish_reasons[src_idx] == tllm.FinishReason.TIMED_OUT:
                 output.finish_reason = 'timeout'
             # For disaggregated serving, finish reason might be NOT_FINISHED which is ok

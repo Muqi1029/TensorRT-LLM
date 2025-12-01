@@ -296,6 +296,10 @@ Executor::Impl::Impl(std::filesystem::path const& modelPath,
     auto const tp = decoderJsonConfig.getTensorParallelism();
     auto const pp = decoderJsonConfig.getPipelineParallelism();
     auto const cp = decoderJsonConfig.getContextParallelism();
+    std::cout << std::string(80, '=') << std::endl;
+    std::cout << "tp: " << tp << " pp: " << pp << " cp: " << cp << std::endl;
+    std::cout << std::string(80, '=') << std::endl;
+
     initializeCommAndWorkers(tp, pp, cp, executorConfig, modelType, modelPath, std::nullopt, decoderJsonConfig);
 
     if (mIsWorker)

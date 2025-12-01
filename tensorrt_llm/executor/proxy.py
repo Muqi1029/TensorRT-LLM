@@ -65,6 +65,7 @@ class GenerationExecutorProxy(GenerationExecutor):
                 logger_debug('create comm session ...\n', "yellow")
                 self.mpi_session = create_mpi_comm_session(model_world_size)
             else:
+                # create a pool session
                 logger_debug('create pool session ...\n', "yellow")
                 self.mpi_session = MpiPoolSession(n_workers=model_world_size)
         else:
@@ -77,6 +78,7 @@ class GenerationExecutorProxy(GenerationExecutor):
                 f"rank {mpi_rank()} using MpiCommSession to bind to external MPI processes\n",
                 "yellow")
         else:
+            # FIXME
             print_colored(
                 f"rank {mpi_rank()} using MpiPoolSession to spawn MPI processes\n",
                 "yellow")

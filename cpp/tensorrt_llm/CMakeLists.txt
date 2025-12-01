@@ -19,6 +19,7 @@ set(SHARED_TARGET
     PARENT_SCOPE)
 set(API_INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 
+# add cutlass_extensions/include & api_include_dir
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/cutlass_extensions/include
                     ${API_INCLUDE_DIR})
 

@@ -1,6 +1,7 @@
 # Adapted from
 # https://github.com/vllm-project/vllm/blob/4db5176d9758b720b05460c50ace3c01026eb158/vllm/entrypoints/openai/protocol.py
 import base64
+import logging
 import time
 import uuid
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -27,6 +28,8 @@ from typing_extensions import Annotated, Required, TypeAlias, TypedDict
 from tensorrt_llm.executor.request import LoRARequest
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
 from tensorrt_llm.llmapi import GuidedDecodingParams, SamplingParams
+
+logger = logging.getLogger(__name__)
 
 
 def _logit_bias_to_embedding_bias(logit_bias: Optional[Dict[str, float]],
@@ -60,7 +63,7 @@ def _logit_bias_to_embedding_bias(logit_bias: Optional[Dict[str, float]],
 
 class OpenAIBaseModel(BaseModel):
     # OpenAI API does not allow extra fields & allow to initialize by both alias and field name
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
 class StreamOptions(OpenAIBaseModel):
@@ -623,6 +626,14 @@ class ChatCompletionRequest(OpenAIBaseModel):
          ))
 
     # doc: end-chat-completion-extra-params
+
+    @model_validator(mode="after")
+    def penalty_reset(self):
+        if self.frequency_penalty < 0:
+            self.frequency_penalty = 0
+        if self.presence_penalty < 0:
+            self.presence_penalty = 0
+        return self
 
     def to_sampling_params(self,
                            vocab_size: int = 32000,

@@ -452,6 +452,7 @@ class GenerationExecutor(ABC):
 
         postproc_worker_config = postproc_worker_config or PostprocWorkerConfig(
         )
+        print(f"{postproc_worker_config=}")
 
         if postproc_worker_config.enabled:
             logger_debug(
@@ -488,6 +489,14 @@ class GenerationExecutor(ABC):
         # The case where the Python main process utilizes mpi4py to spawn MPI workers
         spawn_workers = need_spawn_mpi_workers(model_world_size)
         orchestrator_is_rpc = llm_args and llm_args.orchestrator_type == "rpc"
+
+        print(f"\033[42m")
+        print(f"{spawn_workers=}")  # False
+        print(f"{llm_args=}")  # None
+        print(f"{world_size=}")  # 1
+        print(f"{mpirun_launch=}")  # False
+        print(f"{reuse_mpi_comm=}")  # False
+        print(f"\033[0m")
 
         if spawn_workers or (mpirun_launch and reuse_mpi_comm):
             if reuse_mpi_comm:

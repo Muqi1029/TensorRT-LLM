@@ -515,6 +515,7 @@ def main(*,
         if "70-real" in cuda_architectures:
             raise RuntimeError("Volta architecture is deprecated support.")
 
+    # define CMAKE_CUDA_ARCHITECTURES
     cuda_architectures = cuda_architectures or 'all'
     cmake_cuda_architectures = f'"-DCMAKE_CUDA_ARCHITECTURES={cuda_architectures}"'
 
@@ -618,7 +619,7 @@ def main(*,
             "flash_mla"
         ])
         build_pyt = "ON"
-        build_deep_ep = "ON"
+        build_deep_ep = "ON"  # disable deep_ep
         build_deep_gemm = "ON"
         build_flash_mla = "ON"
 
