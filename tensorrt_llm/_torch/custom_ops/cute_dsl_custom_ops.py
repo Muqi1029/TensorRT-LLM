@@ -40,6 +40,7 @@ if IS_CUTLASS_DSL_AVAILABLE:
                 0, 0, get_last_power_of_2_num_tokens_buckets,
                 last_positive_power_of_2), ),
             constraint_specs=(ConstraintSpec(2, 0, fp4_scale_infer_shape), ),
+            use_cold_l2_cache=True,
         )
 
         def __init__(self, alpha: float, output_dtype: torch.dtype):
@@ -54,13 +55,8 @@ if IS_CUTLASS_DSL_AVAILABLE:
                 )
 
         # rewrite the hash function because the value of self.alpha doesn't affect the tactic.
-        def __hash__(self):
-            return hash((self.output_dtype, ))
-
-        def __eq__(self, other):
-            if not isinstance(other, self.__class__):
-                return False
-            return self.output_dtype == other.output_dtype
+        def unique_id(self):
+            return (self.output_dtype, )
 
         def get_valid_tactics(
             self,
