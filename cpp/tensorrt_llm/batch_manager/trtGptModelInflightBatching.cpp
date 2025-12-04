@@ -834,9 +834,6 @@ void TrtGptModelInflightBatching::forwardSync()
 {
     TLLM_LOG_TRACE("%s start", __PRETTY_FUNCTION__);
     NVTX3_SCOPED_RANGE_WITH_NAME(range, "TrtGptModelInflightBatching::forwardSync");
-    std::cout << std::string(80, '=') << std::endl;
-    std::cout << "forwardSync" << std::endl;
-    std::cout << std::string(80, '=') << std::endl;
 
     TLLM_CUDA_CHECK(cudaSetDevice(mWorldConfig.getDevice()));
 

@@ -94,7 +94,8 @@ class DefaultInputProcessor(InputProcessor):
                 token_ids = self.tokenizer.encode(
                     inputs["prompt"],
                     add_special_tokens=sampling_params.add_special_tokens,
-                    **kwargs)
+                    **kwargs,
+                )
             except:
                 # Tiktoken path
                 token_ids = self.tokenizer.encode(
@@ -106,7 +107,8 @@ class DefaultInputProcessor(InputProcessor):
                     query_token_ids = self.tokenizer.encode(
                         inputs["query"],
                         add_special_tokens=sampling_params.add_special_tokens,
-                        **kwargs)
+                        **kwargs,
+                    )
                 except:
                     # Tiktoken path
                     query_token_ids = self.tokenizer.encode(
@@ -137,7 +139,7 @@ class BaseMultimodalInputProcessor(ABC):
         self._config = config
         self._model_path = model_path
         self._tokenizer = tokenizer
-        self._use_fast: bool = kwargs.get('use_fast', True)
+        self._use_fast: bool = kwargs.get("use_fast", True)
         self._multimodal_hashing_supported: Optional[bool] = None
 
     @property
@@ -201,11 +203,11 @@ class BaseMultimodalInputProcessor(ABC):
         2) self.tokenizer.vocab_size
         """
         # 1) Model config
-        if hasattr(self.config, 'vocab_size'):
+        if hasattr(self.config, "vocab_size"):
             return int(self.config.vocab_size)
 
         # 2) Direct tokenizer on self
-        if hasattr(self.tokenizer, 'vocab_size'):
+        if hasattr(self.tokenizer, "vocab_size"):
             return int(self.tokenizer.vocab_size)
 
         logger.debug(
@@ -218,7 +220,7 @@ class BaseMultimodalInputProcessor(ABC):
 
         The token IDs filtered by this method should be contiguous for each multimodal item, i.e. special tokens if any should be included.
         """
-        if hasattr(self.processor, 'mm_token_ids'):
+        if hasattr(self.processor, "mm_token_ids"):
             return self.processor.mm_token_ids
 
         logger.debug(
@@ -243,7 +245,7 @@ class BaseMultimodalInputProcessor(ABC):
         """
         Get the Hugging Face processor's '_get_num_multimodal_tokens' method.
         """
-        if hasattr(self.processor, '_get_num_multimodal_tokens'):
+        if hasattr(self.processor, "_get_num_multimodal_tokens"):
             return self.processor._get_num_multimodal_tokens
         else:
             raise NotImplementedError(
@@ -297,8 +299,8 @@ class BaseMultimodalInputProcessor(ABC):
             # Fallback: treat video as sequence of frames
             num_tokens_per_frame = self.get_num_tokens_per_image(image=video[0],
                                                                  **kwargs)
-            temporal_patch_size = self.temporal_patch_size if hasattr(
-                self, 'temporal_patch_size') else 1
+            temporal_patch_size = (self.temporal_patch_size if hasattr(
+                self, "temporal_patch_size") else 1)
             return num_tokens_per_frame * num_frames // temporal_patch_size
 
 
@@ -312,9 +314,9 @@ class BaseMultimodalDummyInputsBuilder(ABC):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.image_max_dim = kwargs.get('image_max_dim',
+        self.image_max_dim = kwargs.get("image_max_dim",
                                         self.DEFAULT_IMAGE_MAX_DIM)
-        self.image_min_dim = kwargs.get('image_min_dim',
+        self.image_min_dim = kwargs.get("image_min_dim",
                                         self.DEFAULT_IMAGE_MIN_DIM)
 
     @property
@@ -351,7 +353,8 @@ class BaseMultimodalDummyInputsBuilder(ABC):
                 modality="image",
                 prompts=[""],
                 media=[[image]],
-                image_data_format="pt")[0]
+                image_data_format="pt",
+            )[0]
 
             prompt_token_ids_single_img, _ = self(test_mm_prompt, None)
 
@@ -370,6 +373,7 @@ class MultimodalPlaceholderPlacement(enum.Enum):
         - BEFORE_TEXT: the placeholders are placed before the text prompt.
         - AFTER_TEXT: the placeholders are placed after the text prompt.
     """
+
     INVALID = -1
     BEFORE_TEXT = 0
     AFTER_TEXT = 1
@@ -387,8 +391,10 @@ class MultimodalPlaceholderMetadata:
         - placeholders_separator:
             The separator between the placeholders, e.g. some models use "\n" to separate the placeholders.
     """
+
     placeholder_map: Dict[str, str] = field(default_factory=dict)
-    placeholder_placement: MultimodalPlaceholderPlacement = MultimodalPlaceholderPlacement.AFTER_TEXT
+    placeholder_placement: MultimodalPlaceholderPlacement = (
+        MultimodalPlaceholderPlacement.AFTER_TEXT)
     placeholders_separator: str = "\n"
 
 
@@ -403,13 +409,17 @@ class MultimodalPlaceholderRegistry:
 
     def __str__(self) -> str:
         s = ""
-        for model_type, placeholder_metadata in self._multimodal_placeholder_by_model_type.items(
-        ):
+        for (
+                model_type,
+                placeholder_metadata,
+        ) in self._multimodal_placeholder_by_model_type.items():
             s += "-" * 100 + "\n"
             s += f"Model type: {model_type}\n"
             s += f"Placeholder map: {placeholder_metadata.placeholder_map}\n"
-            s += f"Placeholder placement: {placeholder_metadata.placeholder_placement}\n"
-            s += f"Placeholders separator: \"{placeholder_metadata.placeholders_separator}\"\n"
+            s += (
+                f"Placeholder placement: {placeholder_metadata.placeholder_placement}\n"
+            )
+            s += f'Placeholders separator: "{placeholder_metadata.placeholders_separator}"\n'
             s += "-" * 80 + "\n"
         return s
 
@@ -425,8 +435,10 @@ class MultimodalPlaceholderRegistry:
         del self._multimodal_placeholder_by_model_type[model_type]
 
     def is_valid(self, model_type: str, modality: str) -> bool:
-        return model_type in self._multimodal_placeholder_by_model_type and \
-            modality in self._multimodal_placeholder_by_model_type[model_type].placeholder_map
+        return (model_type in self._multimodal_placeholder_by_model_type
+                and modality
+                in self._multimodal_placeholder_by_model_type[model_type].
+                placeholder_map)
 
     def get_placeholder_metadata(
             self, model_type: str) -> MultimodalPlaceholderMetadata:
@@ -526,9 +538,10 @@ def support_multimodal_disaggregated(model_cls: Type[nn.Module]):
 
 
 def register_input_processor(
-        processor_cls: Type[InputProcessor],
-        model_type: str,
-        placeholder_metadata: MultimodalPlaceholderMetadata = None):
+    processor_cls: Type[InputProcessor],
+    model_type: str,
+    placeholder_metadata: MultimodalPlaceholderMetadata = None,
+):
     """
     Register an input processor to a model class.
     NOTE:
@@ -540,7 +553,7 @@ def register_input_processor(
 
     def wrapper(model_cls: N) -> N:
         INPUT_PROCESSOR_REGISTRY._input_processors_cls_by_model_type[
-            model_cls] = processor_cls
+            model_cls] = (processor_cls)
         if placeholder_metadata is None:
             raise ValueError(
                 f"A valid placeholder_metadata must be provided but got {placeholder_metadata}"
@@ -591,8 +604,9 @@ def create_input_processor(
     if config is not None:
         try:
             model_cls, _ = get_model_architecture(config)
-            input_processor_cls = INPUT_PROCESSOR_REGISTRY._input_processors_cls_by_model_type \
-                .get(model_cls)
+            input_processor_cls = (
+                INPUT_PROCESSOR_REGISTRY._input_processors_cls_by_model_type.
+                get(model_cls))
         except RuntimeError:  # unregistered model
             logger.info("Unregistered model, using DefaultInputProcessor")
             input_processor_cls = None
@@ -626,8 +640,10 @@ def create_input_processor_with_hash(
         """
         Process the multinmodal hashing for media tokens if possible.
         """
-        assert 'multi_modal_data' in inputs, "multi_modal_data must be provided for hashing support."
-        mm_data = inputs['multi_modal_data']
+        assert (
+            "multi_modal_data"
+            in inputs), "multi_modal_data must be provided for hashing support."
+        mm_data = inputs["multi_modal_data"]
         mm_hashes = apply_mm_hashes(mm_data, hash_lib)
         prompt_token_ids, extra_processed_inputs = input_processor(
             inputs, sampling_params)
@@ -675,15 +691,16 @@ def create_input_processor_with_hash(
     ) -> Tuple[List[int], Optional[ExtraProcessedInputs]]:
         try_multimodal_hashing = False  # only used for first time
         use_multimodal_hashing = False  # used for subsequent calls
-        modalities = list(set(inputs['multi_modal_data'].keys())
-                          ) if 'multi_modal_data' in inputs else []
+        modalities = (list(set(inputs["multi_modal_data"].keys()))
+                      if "multi_modal_data" in inputs else [])
         if len(modalities) > 0:
             # TODO: support multimodal hashing for multiple modalities within the same request
             # TODO: add audio support
-            if len(modalities) == 1 and modalities[0] in ['image', 'video']:
+            if len(modalities) == 1 and modalities[0] in ["image", "video"]:
                 # only try multimodal hashing if the inputs only contain image data
                 if input_processor.multimodal_hashing_supported is not None:
-                    use_multimodal_hashing = input_processor.multimodal_hashing_supported
+                    use_multimodal_hashing = (
+                        input_processor.multimodal_hashing_supported)
                 else:
                     # we need to try the multimodal hashing for the first time to determine if it is supported
                     try_multimodal_hashing = True
@@ -698,6 +715,7 @@ def create_input_processor_with_hash(
                 return prompt_token_ids, extra_processed_inputs
             except Exception as e:
                 import traceback
+
                 traceback.print_exc()
                 logger.warning(f"Multimodal hashing failed: {e}.")
                 if try_multimodal_hashing:
@@ -709,6 +727,7 @@ def create_input_processor_with_hash(
                         return input_processor(inputs, sampling_params)
                     except Exception as e2:
                         import traceback
+
                         traceback.print_exc()
                         logger.warning(f"Basic input processor failed: {e}.")
                         raise e2
@@ -719,6 +738,7 @@ def create_input_processor_with_hash(
                 return input_processor(inputs, sampling_params)
             except Exception as e:
                 import traceback
+
                 traceback.print_exc()
                 logger.warning(f"Basic input processor failed: {e}.")
                 raise e

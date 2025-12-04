@@ -59,8 +59,8 @@ class ChatPostprocArgs(PostprocArgs):
     def from_request(cls, request: ChatCompletionRequest):
         return cls(
             echo=request.echo,
-            role="assistant"
-            if request.add_generation_prompt else request.messages[-1]["role"],
+            role=("assistant" if request.add_generation_prompt else
+                  request.messages[-1]["role"]),
             model=request.model,
             num_choices=request.n if request.n else 1,
             tools=request.tools,
@@ -71,11 +71,14 @@ class ChatPostprocArgs(PostprocArgs):
         )
 
 
-def create_logprobs(token_ids: List[int], tokenizer: TransformersTokenizer,
-                    logprobs: List[float] | TokenLogprobs,
-                    top_logprobs: bool) -> ChatCompletionLogProbs:
-    assert len(token_ids) == len(logprobs), \
-            "token_ids and logprobs have different lengths"
+def create_logprobs(
+    token_ids: List[int],
+    tokenizer: TransformersTokenizer,
+    logprobs: List[float] | TokenLogprobs,
+    top_logprobs: bool,
+) -> ChatCompletionLogProbs:
+    assert len(token_ids) == len(
+        logprobs), "token_ids and logprobs have different lengths"
     content: List[ChatCompletionLogProbsContent] = []
     for token_id, logprob in zip(token_ids, logprobs):
         logprob: float | dict[int, Logprob]
@@ -92,8 +95,8 @@ def create_logprobs(token_ids: List[int], tokenizer: TransformersTokenizer,
                         ChatCompletionLogProbsContent(
                             token=(tk := tokenizer.decode(tid)),
                             logprob=max(logprob.logprob, -9999.0),
-                            bytes=list(tk.encode("utf-8", errors="replace")))
-                        for tid, logprob in logprob.items()
+                            bytes=list(tk.encode("utf-8", errors="replace")),
+                        ) for tid, logprob in logprob.items()
                     ]
         else:
             chat_logprob.logprob = max(logprob, -9999.0)
@@ -107,9 +110,9 @@ def apply_reasoning_parser(args: ChatPostprocArgs, output_index: int, text: str,
     reasoning_parser = None
     if args.reasoning_parser is not None:
         if output_index not in args.reasoning_parser_dict:
-            args.reasoning_parser_dict[
-                output_index] = ReasoningParserFactory.create_reasoning_parser(
-                    args.reasoning_parser)
+            args.reasoning_parser_dict[output_index] = (
+                ReasoningParserFactory.create_reasoning_parser(
+                    args.reasoning_parser))
         reasoning_parser = args.reasoning_parser_dict[output_index]
 
     if reasoning_parser is not None:
@@ -157,11 +160,11 @@ def chat_stream_post_processor(rsp: GenerationResultBase,
                          idx: int,
                          role: str | None = None,
                          content: str | None = None):
-        choice_data = ChatCompletionResponseStreamChoice(index=idx,
-                                                         delta=DeltaMessage(
-                                                             role=role,
-                                                             content=content),
-                                                         finish_reason=None)
+        choice_data = ChatCompletionResponseStreamChoice(
+            index=idx,
+            delta=DeltaMessage(role=role, content=content),
+            finish_reason=None,
+        )
         chunk = ChatCompletionStreamResponse(choices=[choice_data],
                                              model=args.model)
         if include_continuous_usage:
@@ -180,7 +183,8 @@ def chat_stream_post_processor(rsp: GenerationResultBase,
     prompt_tokens = args.num_prompt_tokens
     if stream_option := args.stream_options:
         include_usage = stream_option.include_usage
-        include_continuous_usage = include_usage and stream_option.continuous_usage_stats
+        include_continuous_usage = (include_usage
+                                    and stream_option.continuous_usage_stats)
     else:
         include_usage = False
         include_continuous_usage = False
@@ -206,8 +210,8 @@ def chat_stream_post_processor(rsp: GenerationResultBase,
         delta_text, reasoning_delta_text = apply_reasoning_parser(
             args, i, delta_text, True)
 
-        if args.tool_choice and type(
-                args.tool_choice) is ChatCompletionNamedToolChoiceParam:
+        if (args.tool_choice and type(args.tool_choice)
+                is ChatCompletionNamedToolChoiceParam):
             delta_message = DeltaMessage(tool_calls=[
                 DeltaToolCall(
                     function=DeltaFunctionCall(
@@ -243,7 +247,8 @@ def chat_stream_post_processor(rsp: GenerationResultBase,
                 delta_message = DeltaMessage(
                     content=delta_text,
                     reasoning_content=reasoning_delta_text,
-                    tool_calls=tool_calls if tool_calls else None)
+                    tool_calls=tool_calls if tool_calls else None,
+                )
             else:
                 continue
 
@@ -251,7 +256,7 @@ def chat_stream_post_processor(rsp: GenerationResultBase,
             index=i,
             delta=delta_message,
             avg_decoded_tokens_per_iter=getattr(rsp,
-                                                'avg_decoded_tokens_per_iter',
+                                                "avg_decoded_tokens_per_iter",
                                                 None),
             stop_reason=output.stop_reason,
         )
@@ -270,11 +275,13 @@ def chat_stream_post_processor(rsp: GenerationResultBase,
             finish_reason_sent[i] = True
         chunk = ChatCompletionStreamResponse(choices=[choice], model=args.model)
         if include_continuous_usage:
-            chunk.usage = UsageInfo(prompt_tokens=prompt_tokens,
-                                    completion_tokens=output.length,
-                                    total_tokens=output.length + prompt_tokens,
-                                    prompt_tokens_details=PromptTokensDetails(
-                                        cached_tokens=rsp.cached_tokens))
+            chunk.usage = UsageInfo(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=output.length,
+                total_tokens=output.length + prompt_tokens,
+                prompt_tokens_details=PromptTokensDetails(
+                    cached_tokens=rsp.cached_tokens),
+            )
         data = chunk.model_dump_json(exclude_none=True)
         res.append(f"data: {data}\n\n")
 
@@ -314,7 +321,8 @@ def chat_response_post_processor(
                 tool_calls=[
                     ToolCall(function=FunctionCall(
                         name=args.tool_choice.function.name, arguments=text))
-                ])
+                ],
+            )
         else:
             if text is None:
                 text = ""
@@ -324,10 +332,12 @@ def chat_response_post_processor(
                                                arguments=call.parameters))
                 for call in calls
             ]
-            message = ChatMessage(role=role,
-                                  content=text,
-                                  reasoning_content=reasoning_text,
-                                  tool_calls=tool_calls)
+            message = ChatMessage(
+                role=role,
+                content=text,
+                reasoning_content=reasoning_text,
+                tool_calls=tool_calls,
+            )
         disaggregated_params = to_disaggregated_params(
             output.disaggregated_params)
         choice = ChatCompletionResponseChoice(
@@ -336,7 +346,7 @@ def chat_response_post_processor(
             stop_reason=output.stop_reason,
             disaggregated_params=disaggregated_params,
             avg_decoded_tokens_per_iter=getattr(rsp,
-                                                'avg_decoded_tokens_per_iter',
+                                                "avg_decoded_tokens_per_iter",
                                                 None),
         )
         if output.finish_reason == "stop" and args.has_tool_call.get(
@@ -401,7 +411,8 @@ def completion_stream_post_processor(rsp: DetokenizedGenerationResultBase,
     prompt_tokens = args.num_prompt_tokens
     if stream_option := args.stream_options:
         include_usage = stream_option.include_usage
-        include_continuous_usage = include_usage and stream_option.continuous_usage_stats
+        include_continuous_usage = (include_usage
+                                    and stream_option.continuous_usage_stats)
     else:
         include_usage = False
         include_continuous_usage = False
@@ -417,16 +428,18 @@ def completion_stream_post_processor(rsp: DetokenizedGenerationResultBase,
             finish_reason=output.finish_reason,
             stop_reason=output.stop_reason,
             avg_decoded_tokens_per_iter=getattr(rsp,
-                                                'avg_decoded_tokens_per_iter',
+                                                "avg_decoded_tokens_per_iter",
                                                 None),
         )
         chunk = CompletionStreamResponse(model=args.model, choices=[choice])
         if include_continuous_usage:
-            chunk.usage = UsageInfo(prompt_tokens=prompt_tokens,
-                                    completion_tokens=output.length,
-                                    total_tokens=output.length + prompt_tokens,
-                                    prompt_tokens_details=PromptTokensDetails(
-                                        cached_tokens=rsp.cached_tokens))
+            chunk.usage = UsageInfo(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=output.length,
+                total_tokens=output.length + prompt_tokens,
+                prompt_tokens_details=PromptTokensDetails(
+                    cached_tokens=rsp.cached_tokens),
+            )
         data = chunk.model_dump_json(exclude_unset=False)
         res.append(f"data: {data}\n\n")
 
@@ -467,23 +480,25 @@ def completion_response_post_processor(
             token_ids=None if args.detokenize else output.token_ids,
             index=args.prompt_idx * args.num_choices + output.index,
             disaggregated_params=disaggregated_params,
-            context_logits=None
-            if rsp.context_logits is None else rsp.context_logits.tolist(),
+            context_logits=(None if rsp.context_logits is None else
+                            rsp.context_logits.tolist()),
             stop_reason=output.stop_reason,
             finish_reason=output.finish_reason,
             avg_decoded_tokens_per_iter=getattr(rsp,
-                                                'avg_decoded_tokens_per_iter',
+                                                "avg_decoded_tokens_per_iter",
                                                 None),
         )
 
         completion_tokens += output.length
         choices.append(choice)
 
-    usage = UsageInfo(prompt_tokens=prompt_tokens,
-                      completion_tokens=completion_tokens,
-                      total_tokens=completion_tokens + prompt_tokens,
-                      prompt_tokens_details=PromptTokensDetails(
-                          cached_tokens=rsp.cached_tokens))
+    usage = UsageInfo(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=completion_tokens + prompt_tokens,
+        prompt_tokens_details=PromptTokensDetails(
+            cached_tokens=rsp.cached_tokens),
+    )
     response = CompletionResponse(choices=choices,
                                   model=args.model,
                                   usage=usage)

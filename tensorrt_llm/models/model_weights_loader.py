@@ -11,6 +11,8 @@ from safetensors import safe_open
 from tqdm import tqdm
 from transformers import PreTrainedModel
 
+from tensorrt_llm.models.monkey_patch_vocab_utils import patch_embed_tokens
+
 from .._utils import trt_dtype_to_torch
 from ..layers.moe import MOEWeightWrapper
 from ..logger import logger
@@ -101,10 +103,10 @@ class ModelWeightsLoader:
             if k in tllm_key:
                 # Ensure replacement happen when k covers several full sections in tllm_key
                 if not any([
-                    ('.' + k + '.') in tllm_key,
+                    ("." + k + ".") in tllm_key,
                         k == tllm_key,
-                        tllm_key.startswith(k) and (k + '.') in tllm_key,
-                        tllm_key.endswith(k) and ('.' + k) in tllm_key,
+                        tllm_key.startswith(k) and (k + ".") in tllm_key,
+                        tllm_key.endswith(k) and ("." + k) in tllm_key,
                 ]):
                     continue
                 if isinstance(v, list):
@@ -176,7 +178,8 @@ class ModelWeightsLoader:
             self.shards = [
                 safe_open(f, framework="pt", device="cpu") for f in shard_files
             ]
-        elif self.format == ModelWeightsFormat.BINARY or self.format == ModelWeightsFormat.PYTORCH:
+        elif (self.format == ModelWeightsFormat.BINARY
+              or self.format == ModelWeightsFormat.PYTORCH):
             self.shards = [
                 torch.load(f, weights_only=True, map_location="cpu", mmap=True)
                 for f in shard_files
@@ -210,6 +213,12 @@ class ModelWeightsLoader:
             tensor = self.shards[ptr_idx][key]
             tensor_shape = tensor.shape
 
+        if "embed_tokens" in key:
+            print(f"\033[42m Before {tensor_shape=} \033[0m")
+            tensor = patch_embed_tokens(tensor)
+            tensor_shape = tensor.shape
+            print(f"\033[42m After {tensor_shape=} \033[0m")
+
         if tp_size <= 1 or tp_dim < 0:
             return tensor[:]
         else:
@@ -227,11 +236,13 @@ class ModelWeightsLoader:
                 res = tensor[tuple(slice_obj)]
                 return res
 
-    def load(self,
-             tllm_key: str,
-             preprocess: Callable[[int], None] = None,
-             skip_tp: bool = False,
-             custom_postprocess_kwargs: dict = {}):
+    def load(
+        self,
+        tllm_key: str,
+        preprocess: Callable[[int], None] = None,
+        skip_tp: bool = False,
+        custom_postprocess_kwargs: dict = {},
+    ):
         """Load tensor from shards
 
         This function contains following steps:
@@ -256,14 +267,15 @@ class ModelWeightsLoader:
             param = getattr(param, attr)
         if param.is_buffer:
             return {}
-        assert sub_module is not None and param is not None, f"{tllm_key} got Nonetype for parameter or parent module."
+        assert (sub_module is not None and param is not None
+                ), f"{tllm_key} got Nonetype for parameter or parent module."
 
         tllm_to_externel_key_dict = getattr(sub_module,
                                             "tllm_to_externel_key_dict", None)
         tp_dim = getattr(sub_module, "tp_dim", -1)
-        require_weight_transpose = (
-            isinstance(sub_module, WeightOnlyGroupwiseQuantColumnLinear)
-            or isinstance(sub_module, WeightOnlyGroupwiseQuantRowLinear))
+        require_weight_transpose = isinstance(
+            sub_module, WeightOnlyGroupwiseQuantColumnLinear) or isinstance(
+                sub_module, WeightOnlyGroupwiseQuantRowLinear)
         if tp_dim >= 0 and require_weight_transpose:
             if sub_module.prequant_scaling_factor is not None:
                 if tllm_key.endswith("prequant_scaling_factor"):
@@ -274,8 +286,8 @@ class ModelWeightsLoader:
                 tp_dim = 1 - tp_dim
         tp_size = getattr(sub_module, "tp_size", 1)
         # Disable auto TP when num_kv_heads is invalid for split
-        if getattr(sub_module, "is_qkv",
-                   False) and self.model.config.num_key_value_heads < tp_size:
+        if (getattr(sub_module, "is_qkv", False)
+                and self.model.config.num_key_value_heads < tp_size):
             tp_dim = -1
             tp_size = 1
         if skip_tp:
@@ -285,6 +297,7 @@ class ModelWeightsLoader:
             tp_rank = self.model.config.mapping.moe_tp_rank
         external_key = self.translate_to_external_key(
             tllm_key, tllm_to_externel_key_dict)
+
         if isinstance(external_key, list):
             v = [
                 self.load_tensor(k, tp_size, tp_dim, tp_rank)
@@ -332,42 +345,40 @@ class ModelWeightsLoader:
                 for tllm_local_layer_idx, hf_global_layer_idx in enumerate(
                     pp_layers)
             })
-            if self.tllm_to_externel_key_dict['layers'] != 'layers':
-                del self.tllm_to_externel_key_dict['layers']
+            if self.tllm_to_externel_key_dict["layers"] != "layers":
+                del self.tllm_to_externel_key_dict["layers"]
 
         # Share embedding; only applies to standard structure with lm_head and transformer.vocab_embedding
-        if hasattr(self.model, 'lm_head') and hasattr(
-                self.model, 'transformer') and hasattr(self.model.transformer,
-                                                       'vocab_embedding'):
+        if (hasattr(self.model, "lm_head")
+                and hasattr(self.model, "transformer")
+                and hasattr(self.model.transformer, "vocab_embedding")):
             lm_head_weights = self.load_tensor(
-                self.translate_to_external_key('lm_head.weight'))
+                self.translate_to_external_key("lm_head.weight"))
             vocab_embed_weights = self.load_tensor(
                 self.translate_to_external_key(
-                    'transformer.vocab_embedding.weight'))
+                    "transformer.vocab_embedding.weight"))
             if lm_head_weights is None and vocab_embed_weights is not None:
-                self.tllm_to_externel_key_dict[
-                    'lm_head'] = self.tllm_to_externel_key_dict[
-                        'transformer'] + '.' + self.tllm_to_externel_key_dict[
-                            'vocab_embedding']
+                self.tllm_to_externel_key_dict["lm_head"] = (
+                    self.tllm_to_externel_key_dict["transformer"] + "." +
+                    self.tllm_to_externel_key_dict["vocab_embedding"])
             elif lm_head_weights is not None and vocab_embed_weights is None:
-                self.tllm_to_externel_key_dict[
-                    'vocab_embedding'] = self.tllm_to_externel_key_dict[
-                        'lm_head']
+                self.tllm_to_externel_key_dict["vocab_embedding"] = (
+                    self.tllm_to_externel_key_dict["lm_head"])
                 self.model.transformer.vocab_embedding.tllm_to_externel_key_dict = {
-                    'transformer': ''
+                    "transformer": ""
                 }
 
     def fill(self, weights):
         for tllm_key, param in self.model.named_parameters():
             if param.is_buffer:
                 continue
-            if tllm_key.endswith('embed_positions_for_gpt_attention'):
+            if tllm_key.endswith("embed_positions_for_gpt_attention"):
                 continue
             w_shape = weights[tllm_key].shape
             # WAR for 4bit datatype shape mismatch.
             if w_shape != param.shape and param.dtype != trt.fp4:
                 logger.warning(
-                    f'{tllm_key} has invalid shape {w_shape}. Expected {param.shape}.'
+                    f"{tllm_key} has invalid shape {w_shape}. Expected {param.shape}."
                 )
                 pad = torch.nn.functional.pad
                 pad_dim = []
@@ -378,14 +389,14 @@ class ModelWeightsLoader:
                         max(0, param.shape[current_dim] - w_shape[current_dim]))
                 try:
                     logger.warning(
-                        f'{tllm_key} is going to be padded by {pad_dim}.')
+                        f"{tllm_key} is going to be padded by {pad_dim}.")
                     weights[tllm_key] = pad(weights[tllm_key],
                                             tuple(pad_dim),
                                             value=0)
                     assert weights[tllm_key].shape == param.shape
                 except:
                     raise ValueError(
-                        f'Parameter {tllm_key} has invalid shape {weights[tllm_key].shape} compared with expected shape {param.shape}. Auto padding failed.'
+                        f"Parameter {tllm_key} has invalid shape {weights[tllm_key].shape} compared with expected shape {param.shape}. Auto padding failed."
                     )
             param.value = weights[tllm_key]
 

@@ -438,7 +438,7 @@ class OpenAIServer:
                     self.perf_metrics.append(item)
 
     async def openai_chat(self, request: ChatCompletionRequest, raw_request: Request) -> Response:
-        logger.info(f"ARSENAL LOG: {request.model_dump_json()}")
+        # logger.info(f"ARSENAL LOG: {request.model_dump_json()}")
 
         def get_role() -> str:
             if request.add_generation_prompt:
@@ -474,7 +474,7 @@ class OpenAIServer:
                 promise: RequestOutput, postproc_params: PostprocParams, disaggregated_params: Optional[LlmDisaggregatedParams] = None) -> ChatCompletionResponse:
             await promise.aresult()
             if self.postproc_worker_enabled:
-                chat_response =promise.outputs[0]._postprocess_result
+                chat_response = promise.outputs[0]._postprocess_result
             else:
                 post_processor, args = postproc_params.post_processor, postproc_params.postproc_args
                 chat_response = post_processor(promise, args)
