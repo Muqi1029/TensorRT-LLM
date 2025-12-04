@@ -14,22 +14,26 @@ with open(old2new_filepath, "r", encoding="utf-8") as f:
 
 
 def patch_config(config):
-    config.vocab_size = len(new_vocab_list)
+    # config.vocab_size = len(new_vocab_list)
+    config.vocab_size = 4096
 
 
 def patch_embed_tokens(tensor):
     tensor = tensor[:]
-    tensor = tensor[new_vocab_list]
+    tensor = tensor[new_vocab_list[:4096]]
     return tensor
 
 
 def patch_input(input_ids, sampling_params):
-    input_ids = [old2new_dict[str(input_id)] for input_id in input_ids]
+    # input_ids = [old2new_dict[str(input_id)] for input_id in input_ids]
+    input_ids = [i + 1 for i in range(len(input_ids))]
 
-    sampling_params.end_id = old2new_dict[str(sampling_params.end_id)]
-    sampling_params.pad_id = old2new_dict[str(sampling_params.pad_id)]
+    sampling_params.end_id = 125  # old2new_dict[str(sampling_params.end_id)]
+    sampling_params.pad_id = 123  # old2new_dict[str(sampling_params.pad_id)]
     sampling_params._stop_word_ids = [
-        [old2new_dict[str(token_id[0])]] for token_id in sampling_params._stop_word_ids
+        # [old2new_dict[str(token_id[0])]] for token_id in sampling_params._stop_word_ids
+        [125]
+        for token_id in sampling_params._stop_word_ids
     ]
 
     return input_ids, sampling_params
