@@ -24,7 +24,6 @@ from ..disaggregated_params import DisaggregatedParams
 from ..llmapi.tracer import global_tracer
 from ..llmapi.utils import AsyncQueue, print_traceback_on_error
 from ..metrics import MetricNames, MetricsCollector, RequestEventTiming
-from ..models.monkey_patch_vocab_utils import patch_output
 from ..sampling_params import LogprobParams, SamplingParams
 from .utils import ErrorResponse, has_event_loop, is_llm_response
 
@@ -171,7 +170,6 @@ class GenerationResultBase:
         self,
         id: int,
         sampling_params: SamplingParams,
-        ray_queue: Optional[RayAsyncQueue] = None,
         background_error_handler: Optional[Callable] = None,
         postproc_params: "Optional[PostprocParams]" = None,
     ):
@@ -347,21 +345,7 @@ class GenerationResultBase:
                             output.token_ids = output.token_ids[:-len(stop_ids)]
                         break
             elif finish_reasons[src_idx] == tllm.FinishReason.LENGTH:
-                # FIXME(Muqi1029): fix trtllm bugs temporarily
-                if len(output.token_ids) <= self.sampling_params.max_tokens:
-                    output.finish_reason = "stop"
-                    for (
-                            stop_reason,
-                            stop_ids,
-                    ) in self.sampling_params._get_stop_reasons_and_words():
-                        if output.token_ids[-len(stop_ids):] == stop_ids:
-                            output.stop_reason = stop_reason
-                            if not self.sampling_params.include_stop_str_in_output:
-                                output.token_ids = output.token_ids[:-len(
-                                    stop_ids)]
-                            break
-                else:
-                    output.finish_reason = "length"
+                output.finish_reason = "length"
             elif finish_reasons[src_idx] == tllm.FinishReason.TIMED_OUT:
                 output.finish_reason = "timeout"
             # For disaggregated serving, finish reason might be NOT_FINISHED which is ok
@@ -696,9 +680,8 @@ class DetokenizedGenerationResultBase(GenerationResultBase):
                             **kwargs,
                         ))
                 else:
-                    output_ids = patch_output(beam_output.token_ids)
                     beam_output.text = self.tokenizer.decode(
-                        output_ids, **kwargs)
+                        beam_output.token_ids, **kwargs)
 
                 is_generating = not self._done
                 is_finished_with_stop_or_length = (
