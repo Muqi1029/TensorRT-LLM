@@ -138,6 +138,7 @@ class Attention(nn.Module):
         disable_deep_gemm: bool = False,
         attn_output_gate: Optional[bool] = None,
         use_custom_cublas_mm: bool = False,
+        reduce_output: bool = True,
     ):
         """
         Initialize the Attention module.
@@ -274,6 +275,7 @@ class Attention(nn.Module):
             quant_config=config.get_quant_config(),
             skip_create_weights_in_init=config.skip_create_weights_in_init,
             lora=self.o_lora,
+            reduce_output=reduce_output,
             allreduce_strategy=config.allreduce_strategy,
             force_dynamic_quantization=config.force_dynamic_quantization,
             disable_deep_gemm=disable_deep_gemm,
@@ -380,8 +382,11 @@ class Attention(nn.Module):
         out_dtype = q.dtype
 
         if self.attn_backend == "TRTLLM":
-            if self.has_quant_scale and (self.attn.has_fp8_kv_cache
-                                         or self.attn.has_fp4_kv_cache):
+            # Don't use FP8 output if o_proj has pre_quant_scale - keep BF16 for better precision
+            has_pre_quant_scale = getattr(self.o_proj, 'pre_quant_scale',
+                                          None) is not None
+            if self.has_quant_scale and not has_pre_quant_scale and (
+                    self.attn.has_fp8_kv_cache or self.attn.has_fp4_kv_cache):
                 out_dtype = torch.float8_e4m3fn
         output = q.new_empty([num_tokens, hidden_size], dtype=out_dtype)
         return output
@@ -412,8 +417,18 @@ class Attention(nn.Module):
 
         out_scale = None
         out_scale_sf = None
-        if self.has_quant_scale and not self.attn_output_gate:
+        has_awq_pre_quant_scale = hasattr(
+            self.o_proj,
+            'pre_quant_scale') and self.o_proj.pre_quant_scale is not None
+        # Don't set out_scale if o_proj has pre_quant_scale - this prevents FP8/FP4 output
+        # and keeps attention output in BF16 for better precision when applying pre_quant_scale
+        if self.has_quant_scale and not self.attn_output_gate and not has_awq_pre_quant_scale:
             out_scale = self.o_proj.inv_input_scale
+        if has_awq_pre_quant_scale and enable_attn_nvfp4_output:
+            logger.warning_once(
+                "Disable attn nvfp4 output because o_proj has pre_quant_scale for AWQ.",
+                key="disable_attn_nvfp4_output_for_awq")
+            enable_attn_nvfp4_output = False
         if self.o_proj.has_nvfp4 and self.support_nvfp4_output and enable_attn_nvfp4_output and not self.attn_output_gate:
             out_scale_sf = self.o_proj.input_scale
 
@@ -687,6 +702,7 @@ class MLA(nn.Module):
         config: Optional[ModelConfig] = None,
         enable_unit_test: bool = False,
         mapping_with_cp: Optional[Mapping] = None,
+        reduce_output: bool = True,
     ):
         """
         Initialize the MLA module.
@@ -894,6 +910,7 @@ class MLA(nn.Module):
             tensor_parallel_mode=TensorParallelMode.ROW,
             quant_config=quant_config,
             skip_create_weights_in_init=config.skip_create_weights_in_init,
+            reduce_output=reduce_output,
             allreduce_strategy=config.allreduce_strategy,
             force_dynamic_quantization=config.force_dynamic_quantization)
 
@@ -967,6 +984,14 @@ class MLA(nn.Module):
                 head_dim=self.qk_rope_head_dim,
                 is_neox=pos_embd_params.is_neox,
             )
+
+        self.llama_4_scaling = False
+        if hasattr(config.pretrained_config, 'llama_4_scaling'):
+            self.llama_4_scaling = True
+            self.floor_scale = getattr(config.pretrained_config.llama_4_scaling,
+                                       'original_max_position_embeddings', 8192)
+            self.attn_scale = getattr(config.pretrained_config.llama_4_scaling,
+                                      'beta', 0.1)
 
         if not config.skip_create_weights_in_init:
             self.create_weights()
@@ -1110,6 +1135,18 @@ class MLA(nn.Module):
         return hidden_states.new_empty([num_tokens, hidden_size],
                                        dtype=hidden_states.dtype)
 
+    def _attention_scaling(self, q, position_ids):
+
+        def _get_attn_scale(position_ids: torch.Tensor) -> torch.Tensor:
+            positions = position_ids.view(-1)
+            floor = torch.floor((positions + 1.0) / self.floor_scale)
+            attn_scale = torch.log(floor + 1.0) * self.attn_scale + 1.0
+            return attn_scale.unsqueeze(-1)
+
+        attn_scale = _get_attn_scale(position_ids)
+        q = (q * attn_scale).to(q.dtype)
+        return q
+
     def forward_impl(self,
                      position_ids: Optional[torch.Tensor],
                      hidden_states: torch.Tensor,
@@ -1180,6 +1217,10 @@ class MLA(nn.Module):
                 assert position_ids is not None
                 k_pe_ctx = self.apply_rope(q_ctx, k_pe_ctx, position_ids)
 
+            if self.llama_4_scaling:
+                q_ctx = self._attention_scaling(
+                    q_ctx, position_ids[..., :num_ctx_tokens])
+
             self.forward_context(
                 q_ctx,
                 compressed_kv_ctx,
@@ -1199,6 +1240,10 @@ class MLA(nn.Module):
             if self.apply_rotary_emb:
                 assert position_ids is not None
                 k_pe_gen = self.apply_rope(q_gen, k_pe_gen, position_ids)
+
+            if self.llama_4_scaling:
+                q_gen = self._attention_scaling(
+                    q_gen, position_ids[..., num_ctx_tokens:])
 
             self.forward_absorption_generation(
                 q_gen,
