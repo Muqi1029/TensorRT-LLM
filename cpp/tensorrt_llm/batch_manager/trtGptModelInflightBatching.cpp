@@ -2261,6 +2261,9 @@ void TrtGptModelInflightBatching::updateRequests(ScheduledRequests const& schedu
             {
                 auto const newTokenIdx = tc::flat_index(hostNewOutputTokensShape.d, step, seqSlot, beam);
                 auto const newToken = hostNewOutputTokensData[newTokenIdx];
+                std::cout << "add newToken '" << newToken << "' & beam '" << beam << "'" << std::endl;
+
+                // TODO: do convert here
                 llmReq->addNewToken(newToken, beam);
                 TLLM_LOG_DEBUG("request ID %ld beam %d newToken %d", llmReq->mRequestId, beam, newToken);
 

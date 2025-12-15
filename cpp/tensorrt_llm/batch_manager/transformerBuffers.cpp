@@ -383,6 +383,7 @@ void TransformerBuffers::copyKvBlockOffsets(RequestVector const& contextRequests
         auto* srcPtr = bufferCast<tk::KVCacheIndex>(*offsetsHost);
         auto* dstPtr = bufferCast<tk::KVCacheIndex>(*offsetsDevice);
 
+        // FIXME(Muqi1029@gmail.com): invliad pitch argument
         TLLM_CUDA_CHECK(cudaMemcpy2DAsync(
             dstPtr, copyPitch, srcPtr, copyPitch, copyWidth, copyHeight, cudaMemcpyHostToDevice, cudaStream.get()));
     };

@@ -41,11 +41,3 @@ def patch_input(input_ids, sampling_params):
 
 def patch_output(output_ids) -> List[int]:
     return [new_vocab_list[id] for id in output_ids]
-
-
-class FakeSlice:
-    def __init__(self, original_slice, key):
-        self.original_slice = slice
-
-    def get_shape(self):
-        pass

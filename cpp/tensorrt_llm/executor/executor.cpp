@@ -21,17 +21,20 @@
 namespace tensorrt_llm::executor
 {
 
+// decoderModelPath
 Executor::Executor(std::filesystem::path const& modelPath, ModelType modelType, ExecutorConfig const& executorConfig)
     : mImpl(std::make_unique<Executor::Impl>(modelPath, std::nullopt, modelType, executorConfig))
 {
 }
 
+// encoderModelPath & decoderModelPath
 Executor::Executor(std::filesystem::path const& encoderModelPath, std::filesystem::path const& decoderModelPath,
     ModelType modelType, ExecutorConfig const& executorConfig)
     : mImpl(std::make_unique<Executor::Impl>(decoderModelPath, encoderModelPath, modelType, executorConfig))
 {
 }
 
+// decoderEngineBuffer
 Executor::Executor(BufferView const& engineBuffer, std::string const& jsonConfigStr, ModelType modelType,
     ExecutorConfig const& executorConfig, std::optional<std::map<std::string, Tensor>> const& managedWeights)
     : mImpl(std::make_unique<Executor::Impl>(
@@ -39,6 +42,7 @@ Executor::Executor(BufferView const& engineBuffer, std::string const& jsonConfig
 {
 }
 
+// encoderEngineBuffer & decoderEngineBuffer
 Executor::Executor(BufferView const& encoderEngineBuffer, std::string const& encoderJsonConfigStr,
     BufferView const& decoderEngineBuffer, std::string const& decoderJsonConfigStr, ModelType modelType,
     ExecutorConfig const& executorConfig)
@@ -47,6 +51,7 @@ Executor::Executor(BufferView const& encoderEngineBuffer, std::string const& enc
 {
 }
 
+// move copy
 Executor::Executor(std::shared_ptr<Model> model, ExecutorConfig const& executorConfig)
     : mImpl(std::make_unique<Executor::Impl>(std::move(model), std::nullopt, executorConfig))
 {
