@@ -11,13 +11,12 @@ from safetensors import safe_open
 from tqdm import tqdm
 from transformers import PreTrainedModel
 
-from tensorrt_llm.models.monkey_patch_vocab_utils import patch_embed_tokens
-
 from .._utils import trt_dtype_to_torch
 from ..layers.moe import MOEWeightWrapper
 from ..logger import logger
 from ..quantization.layers import (WeightOnlyGroupwiseQuantColumnLinear,
                                    WeightOnlyGroupwiseQuantRowLinear)
+from .monkey_patch_vocab_utils import patch_tensors
 
 
 class ModelWeightsFormat(Enum):
@@ -213,11 +212,11 @@ class ModelWeightsLoader:
             tensor = self.shards[ptr_idx][key]
             tensor_shape = tensor.shape
 
-        if "embed_tokens" in key:
-            print(f"\033[42m Before {tensor_shape=} \033[0m")
-            tensor = patch_embed_tokens(tensor)
+        if "lm_head" in key:
+            logger.info(f"\033[42m Before {tensor_shape=} \033[0m")
+            tensor = patch_tensors(tensor)
             tensor_shape = tensor.shape
-            print(f"\033[42m After {tensor_shape=} \033[0m")
+            logger.info(f"\033[42m After {tensor_shape=} \033[0m")
 
         if tp_size <= 1 or tp_dim < 0:
             return tensor[:]

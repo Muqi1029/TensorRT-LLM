@@ -12,7 +12,7 @@ def pretty_print(content: str):
     print(f" {content} ".center(80, "="))
 
 
-model_path = os.environ["GR_QWEN_05B"]
+model_path = os.environ["GR_F1_QWEN_05B"]
 
 
 class TOKENTYPE(Enum):
@@ -70,6 +70,17 @@ def convert_back(token_ids: List[int], tokenizer) -> str:
     print(f"{text=}")
 
 
+def show_semantic_ids(vocab):
+    start_id = 155742
+    ids = []
+    for token, token_id in vocab.items():
+        if token_id >= start_id:
+            ids.append(token_id)
+    ids.sort()
+    with open("new2old.json", "w", encoding="utf-8") as f:
+        json.dump(ids, f, indent=2, ensure_ascii=False)
+
+
 if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(model_path)
 
@@ -79,7 +90,8 @@ if __name__ == "__main__":
     pretty_print(f"Original Vocab Size: {len(vocab)}")
     # test_token(" ")
 
-    truncate(vocab)
+    # truncate(vocab)
+    show_semantic_ids(vocab)
     # find_key(108386)
 
     # token_ids = [28542, 43141, 96773, 15960, 111229, 39238]

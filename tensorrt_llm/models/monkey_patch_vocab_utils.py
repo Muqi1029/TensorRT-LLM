@@ -1,43 +1,36 @@
 import json
 import os
-from typing import List
+from pathlib import Path
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-filepath = os.path.join(script_dir, "qwen/new_token_ids.json")
+vocab_map_filename = "new2old.json"
+vocab_map_filepath = Path(os.path.dirname(__file__)).parent.parent / vocab_map_filename
 
-with open(filepath, "r", encoding="utf-8") as f:
-    new_vocab_list = json.load(f)
+with open(vocab_map_filepath, "r", encoding="utf-8") as f:
+    vocab_map_list = json.load(f)
 
-old2new_filepath = os.path.join(script_dir, "qwen/old2new.json")
-with open(old2new_filepath, "r", encoding="utf-8") as f:
-    old2new_dict = json.load(f)
+new_vocab_len = len(vocab_map_list)
 
 
-def patch_config(config):
-    # config.vocab_size = len(new_vocab_list)
-    config.vocab_size = 4096
-
-
-def patch_embed_tokens(tensor):
+def patch_tensors(tensor):
     tensor = tensor[:]
-    tensor = tensor[new_vocab_list[:4096]]
+    tensor = tensor[vocab_map_list]
     return tensor
 
 
-def patch_input(input_ids, sampling_params):
-    # input_ids = [old2new_dict[str(input_id)] for input_id in input_ids]
-    input_ids = [i + 1 for i in range(len(input_ids))]
-
-    sampling_params.end_id = 125  # old2new_dict[str(sampling_params.end_id)]
-    sampling_params.pad_id = 123  # old2new_dict[str(sampling_params.pad_id)]
-    sampling_params._stop_word_ids = [
-        # [old2new_dict[str(token_id[0])]] for token_id in sampling_params._stop_word_ids
-        [125]
-        for token_id in sampling_params._stop_word_ids
-    ]
-
-    return input_ids, sampling_params
-
-
-def patch_output(output_ids) -> List[int]:
-    return [new_vocab_list[id] for id in output_ids]
+# def patch_input(input_ids, sampling_params):
+#     # input_ids = [old2new_dict[str(input_id)] for input_id in input_ids]
+#     input_ids = [i + 1 for i in range(len(input_ids))]
+#
+#     sampling_params.end_id = 125  # old2new_dict[str(sampling_params.end_id)]
+#     sampling_params.pad_id = 123  # old2new_dict[str(sampling_params.pad_id)]
+#     sampling_params._stop_word_ids = [
+#         # [old2new_dict[str(token_id[0])]] for token_id in sampling_params._stop_word_ids
+#         [125]
+#         for token_id in sampling_params._stop_word_ids
+#     ]
+#
+#     return input_ids, sampling_params
+#
+#
+# def patch_output(output_ids) -> List[int]:
+#     return [new_vocab_list[id] for id in output_ids]

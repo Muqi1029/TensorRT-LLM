@@ -21,7 +21,6 @@ from tensorrt_llm.inputs.registry import (BaseMultimodalInputProcessor,
                                           DefaultInputProcessor)
 from tensorrt_llm.llmapi import tracing
 from tensorrt_llm.metrics.enums import MetricNames
-from tensorrt_llm.models.monkey_patch_vocab_utils import patch_input
 
 from .._utils import nvtx_range_debug
 from ..bindings import executor as tllm
@@ -514,8 +513,6 @@ class BaseLLM:
             _postproc_params.postproc_args.num_prompt_tokens = len(
                 prompt_token_ids)
 
-        prompt_token_ids, sampling_params = patch_input(prompt_token_ids,
-                                                        sampling_params)
         result = self._executor.generate_async(
             prompt_token_ids,
             query_token_ids=query_token_ids,
