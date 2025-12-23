@@ -771,7 +771,7 @@ class PretrainedModel(Module,
             tp_size = config.mapping.tp_size
             cp_size = config.mapping.cp_size
             rank = rank % tp_size + rank // (tp_size * cp_size) * tp_size
-        weights_path = os.path.join(ckpt_dir, f"rank{rank}.safetensors")
+        weights_path = os.path.join(ckpt_dir, f"model.safetensors")
 
         assert os.path.isfile(weights_path)
         weights = safetensors.torch.load_file(weights_path)

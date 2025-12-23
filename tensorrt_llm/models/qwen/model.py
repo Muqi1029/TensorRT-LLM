@@ -271,7 +271,8 @@ class QWenForCausalLM(DecoderModelForCausalLM):
                     gather_output=True,
                 )
                 logger.info(
-                    f"\033[42m Qwen Initialization: {lm_head.shape=} \033[0m")
+                    f"\033[42m Qwen Initialization: {lm_head.weight.shape=} \033[0m"
+                )
         else:
             lm_head = None
         self.quant_mode = config.quant_mode

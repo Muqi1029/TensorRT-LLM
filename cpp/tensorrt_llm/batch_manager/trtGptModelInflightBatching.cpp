@@ -1701,7 +1701,8 @@ void TrtGptModelInflightBatching::prepareDistGenBufferAndDecoder(RequestVector c
         auto firstGenTokens = request->getContextPhaseParams().value().getFirstGenTokens();
         for (SizeType32 beam = 0; beam < reqBeamWidth; ++beam)
         {
-            request->addNewToken(firstGenTokens.at(beam), beam);
+            std::cout << firstGenTokens.at(beam) << " => " << firstGenTokens.at(beam) + 155742 << std::endl;
+            request->addNewToken(firstGenTokens.at(beam) + 155742, beam);
         }
     }
 
@@ -2260,11 +2261,14 @@ void TrtGptModelInflightBatching::updateRequests(ScheduledRequests const& schedu
             for (SizeType32 step = 0; step < numNewTokens[beam]; ++step)
             {
                 auto const newTokenIdx = tc::flat_index(hostNewOutputTokensShape.d, step, seqSlot, beam);
-                auto const newToken = hostNewOutputTokensData[newTokenIdx];
-                std::cout << "add newToken '" << newToken << "' & beam '" << beam << "'" << std::endl;
+                auto newToken = hostNewOutputTokensData[newTokenIdx];
+                // std::cout << "add newToken '" << newToken << "=>" << 155742 + newToken << "' & beam '" << beam << "'"
+                // << std::endl;
+                newToken += 155742;
 
                 // TODO: do convert here
                 llmReq->addNewToken(newToken, beam);
+
                 TLLM_LOG_DEBUG("request ID %ld beam %d newToken %d", llmReq->mRequestId, beam, newToken);
 
                 if (llmReq->returnLogProbs())

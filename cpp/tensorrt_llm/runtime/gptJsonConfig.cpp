@@ -190,7 +190,9 @@ ModelConfig createModelConfig(Json const& json, bool engineVersionNone, SizeType
     auto const numRnnLayers
         = static_cast<SizeType32>(std::count(layerTypes.begin(), layerTypes.end(), ModelConfig::LayerType::kRECURRENT));
 
-    auto const vocabSize = config.at("vocab_size").template get<SizeType32>();
+    // auto const vocabSize = config.at("vocab_size").template get<SizeType32>();
+    auto const vocabSize = 4096;
+
     auto const hiddenSize = config.at("hidden_size").template get<SizeType32>() / tensorParallelism;
     auto const sizePerHead = parseJsonFieldOr(config, "head_size", hiddenSize / numHeads);
 

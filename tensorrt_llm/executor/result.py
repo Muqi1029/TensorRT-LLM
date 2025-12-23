@@ -680,8 +680,18 @@ class DetokenizedGenerationResultBase(GenerationResultBase):
                             **kwargs,
                         ))
                 else:
+
                     beam_output.text = self.tokenizer.decode(
-                        beam_output.token_ids, **kwargs)
+                        [
+                            155742 + token_id
+                            for token_id in beam_output.token_ids
+                        ],
+                        **kwargs,
+                    )
+                    # beam_output.text = self.tokenizer.decode(
+                    #     beam_output.token_ids,
+                    #     **kwargs,
+                    # )
 
                 is_generating = not self._done
                 is_finished_with_stop_or_length = (

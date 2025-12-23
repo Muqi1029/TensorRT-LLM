@@ -244,8 +244,8 @@ void LlmRequest::validate(SizeType32 maxInputLen, SizeType32 maxSequenceLen, Siz
 {
     if (mEndId.has_value())
     {
-        TLLM_CHECK_WITH_INFO(*mEndId >= -1 && *mEndId < vocabSizePadded,
-            "EndId (%d) is not within acceptable range [-1, %d).", *mEndId, vocabSizePadded);
+        // TLLM_CHECK_WITH_INFO(*mEndId >= -1 && *mEndId < vocabSizePadded,
+        //     "EndId (%d) is not within acceptable range [-1, %d).", *mEndId, vocabSizePadded);
     }
     if (getEncoderInputFeatures()
         && getEncoderInputFeatures()->getShape().nbDims < 4) // skip encoder shape validation for image inputs

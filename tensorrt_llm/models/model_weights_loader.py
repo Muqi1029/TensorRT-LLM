@@ -192,6 +192,7 @@ class ModelWeightsLoader:
             self.shard_map.update({k: idx for k in shard.keys()})
 
     def load_tensor(self, key, tp_size=1, tp_dim=-1, tp_rank=0):
+        # logger.info(f"\033[42m Load {key=} \033[0m")
         # Retrieve shard index
         if key in self.shard_map:
             ptr_idx = self.shard_map[key]
@@ -211,12 +212,6 @@ class ModelWeightsLoader:
         else:
             tensor = self.shards[ptr_idx][key]
             tensor_shape = tensor.shape
-
-        if "lm_head" in key:
-            logger.info(f"\033[42m Before {tensor_shape=} \033[0m")
-            tensor = patch_tensors(tensor)
-            tensor_shape = tensor.shape
-            logger.info(f"\033[42m After {tensor_shape=} \033[0m")
 
         if tp_size <= 1 or tp_dim < 0:
             return tensor[:]
@@ -304,6 +299,18 @@ class ModelWeightsLoader:
             ]
         else:
             v = self.load_tensor(external_key, tp_size, tp_dim, tp_rank)
+
+        # FIXME(muqi1029@gmail.com): support tp > 1
+        assert (
+            tp_size == 1
+        ), f"Truncated Vocab Implementation now doesn't support tp_size > 1"
+        if "lm_head" in tllm_key:
+            tensor_shape = v.shape
+            logger.info(f"\033[42m Before {tensor_shape=} \033[0m")
+            v = patch_tensors(v)
+            tensor_shape = v.shape
+            logger.info(f"\033[42m After {tensor_shape=} \033[0m")
+        # end
 
         if preprocess is not None:
             v = preprocess(v)

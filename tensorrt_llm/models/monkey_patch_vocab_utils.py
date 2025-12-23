@@ -5,6 +5,7 @@ from pathlib import Path
 vocab_map_filename = "new2old.json"
 vocab_map_filepath = Path(os.path.dirname(__file__)).parent.parent / vocab_map_filename
 
+print(f"Load map file: {vocab_map_filepath=}")
 with open(vocab_map_filepath, "r", encoding="utf-8") as f:
     vocab_map_list = json.load(f)
 
@@ -12,7 +13,6 @@ new_vocab_len = len(vocab_map_list)
 
 
 def patch_tensors(tensor):
-    tensor = tensor[:]
     tensor = tensor[vocab_map_list]
     return tensor
 

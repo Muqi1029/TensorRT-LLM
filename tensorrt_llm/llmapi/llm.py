@@ -3,7 +3,6 @@ import json
 import os
 import shutil
 import socket
-import tempfile
 import time
 import weakref
 from collections.abc import Mapping
@@ -228,8 +227,10 @@ class BaseLLM:
             self._engine_dir: Optional[Path] = None
             self._executor: Optional[GenerationExecutor] = None
             if self._on_trt_backend:
-                self._workspace = tempfile.TemporaryDirectory(
-                    suffix="-llm-workspace", dir=self.args.workspace)
+                self._workspace = "/root/trtllm-engine"
+                # self._workspace = tempfile.TemporaryDirectory(
+                #     suffix="-llm-workspace", dir=self.args.workspace
+                # )
             else:
                 self._workspace = None
 
