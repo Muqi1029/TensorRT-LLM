@@ -18,6 +18,7 @@ from ..speculative.eagle3 import Eagle3ResourceManager
 from ..speculative.mtp import SampleStateTensorsMTP
 from ..utils import make_weak_ref, piecewise_cuda_graph
 from .llm_request import get_draft_token_length
+from .mamba_cache_manager import MambaCacheManager
 from .resource_manager import (BaseResourceManager, ResourceManager,
                                ResourceManagerType)
 from .sampler import SampleStateTensors
@@ -319,7 +320,7 @@ class CUDAGraphRunner:
         }
         if self.config.use_mrope:
             sliced_static_tensors["position_ids"] = self.shared_static_tensors[
-                "position_ids"][:, :, :num_tokens_for_capture],
+                "position_ids"][:, :, :num_tokens_for_capture]
             sliced_static_tensors[
                 "multimodal_params"] = self.shared_static_tensors[
                     "multimodal_params"][:batch_size * self.max_beam_width]
@@ -449,6 +450,11 @@ class CUDAGraphRunner:
                 ResourceManagerType.SPEC_RESOURCE_MANAGER)
             if spec_res_mgr:
                 spec_res_mgr.add_dummy_requests([CUDA_GRAPH_DUMMY_REQUEST_ID])
+
+        # handle special cases of padding requests + MambaCacheManager or MambaHybridCacheManager
+        if isinstance(kv_cache_manager, MambaCacheManager):
+            kv_cache_manager.reorder_state_indices_when_padding_requests(
+                batch_size, padding_size)
 
         self.padding_dummy_request.py_draft_tokens = [0] * runtime_draft_len
         batch.generation_requests.extend([self.padding_dummy_request] *

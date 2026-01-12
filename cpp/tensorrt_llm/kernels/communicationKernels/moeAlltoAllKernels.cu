@@ -37,17 +37,6 @@ TRTLLM_NAMESPACE_END
  * limitations under the License.
  */
 
-// #include "tensorrt_llm/common/assert.h"
-// #include "tensorrt_llm/common/config.h"
-// #include "tensorrt_llm/common/cudaUtils.h"
-// #include "tensorrt_llm/common/envUtils.h"
-// #include "tensorrt_llm/common/vec_dtypes.cuh"
-// #include "tensorrt_llm/kernels/communicationKernels/moeAlltoAllKernels.h"
-// #include "tensorrt_llm/kernels/quantization.cuh"
-// #include <cooperative_groups.h>
-// #include <cstdint>
-// #include <type_traits>
-//
 // TRTLLM_NAMESPACE_BEGIN
 //
 // namespace kernels::moe_comm
@@ -72,6 +61,12 @@ TRTLLM_NAMESPACE_END
 // #define SWITCH_TOP_K(top_k, TOP_K, ...) \
 //     switch (top_k) \
 //     { \
+//     case 22: \
+//     { \
+//         constexpr int TOP_K = 22; \
+//         __VA_ARGS__; \
+//         break; \
+//     } \
 //     case 16: \
 //     { \
 //         constexpr int TOP_K = 16; \
@@ -379,7 +374,7 @@ TRTLLM_NAMESPACE_END
 //
 // template <typename ThreadingPolicy, int TOP_K>
 // __global__ void moeA2ADispatchKernel(int32_t const* token_selected_experts, // [local_num_tokens, TOP_K]
-//     DispatchKernelPointers const ptrs,                                      // Struct containing all kernel pointers
+//     const DispatchKernelPointers ptrs,                                      // Struct containing all kernel pointers
 //     int num_payloads,                                                       // Number of payloads
 //     int max_tokens_per_rank,                                                // Maximum tokens per rank
 //     int local_num_tokens, int rank_id, int ep_size, int num_experts_per_rank)
@@ -388,88 +383,97 @@ TRTLLM_NAMESPACE_END
 //     int thread_idx = ThreadingPolicy::offset();
 //     int local_token_idx = ThreadingPolicy::token_idx();
 //
-//     if (local_token_idx >= local_num_tokens)
+//     if (local_num_tokens == 0)
 //     {
-//         return;
-//     }
-//
-//     // Prepare per-policy shared-memory tiles for this token
-//     extern __shared__ int smem[];
-//     int* smem_topk_target_ranks;
-//     int* smem_topk_send_indices;
-//     int warps_per_block = blockDim.x / warpSize;
-//     if constexpr (std::is_same<ThreadingPolicy, WarpPolicy>::value)
-//     {
-//         int lane_id = threadIdx.x / warpSize;
-//         smem_topk_target_ranks = smem + lane_id * TOP_K;
-//         smem_topk_send_indices = smem + warps_per_block * TOP_K + lane_id * TOP_K;
+//         // Special case: If local_num_tokens == 0,
+//         // we need to keep the threads where local_token_idx == 0 alive to participate in the synchronization.
+//         // Other threads should return.
+//         if (local_token_idx > 0)
+//             return;
 //     }
 //     else
 //     {
-//         smem_topk_target_ranks = smem;
-//         smem_topk_send_indices = smem + TOP_K;
-//     }
+//         // Threads that do not have a token to process should return.
+//         if (local_token_idx >= local_num_tokens)
+//             return;
 //
-//     uint64_t already_copied = 0;
-//     for (int k = 0; k < TOP_K; k++)
-//     {
-//         int expert_id = token_selected_experts[local_token_idx * TOP_K + k];
-//         // Use contiguous partitioning to determine target rank
-//         int target_rank = compute_target_rank_id(expert_id, num_experts_per_rank);
-//
-//         if (already_copied & (1ULL << target_rank))
+//         // Prepare per-policy shared-memory tiles for this token
+//         extern __shared__ int smem[];
+//         int* smem_topk_target_ranks;
+//         int* smem_topk_send_indices;
+//         int warps_per_block = blockDim.x / warpSize;
+//         if constexpr (std::is_same<ThreadingPolicy, WarpPolicy>::value)
 //         {
+//             int lane_id = threadIdx.x / warpSize;
+//             smem_topk_target_ranks = smem + lane_id * TOP_K;
+//             smem_topk_send_indices = smem + warps_per_block * TOP_K + lane_id * TOP_K;
+//         }
+//         else
+//         {
+//             smem_topk_target_ranks = smem;
+//             smem_topk_send_indices = smem + TOP_K;
+//         }
+//
+//         uint64_t already_copied = 0;
+//         for (int k = 0; k < TOP_K; k++)
+//         {
+//             int expert_id = token_selected_experts[local_token_idx * TOP_K + k];
+//             // Use contiguous partitioning to determine target rank
+//             int target_rank = compute_target_rank_id(expert_id, num_experts_per_rank);
+//
+//             if (already_copied & (1ULL << target_rank))
+//             {
+//                 if (thread_idx == 0)
+//                 {
+//                     ptrs.topk_target_ranks[local_token_idx * TOP_K + k] = -1;
+//                     ptrs.topk_send_indices[local_token_idx * TOP_K + k] = -1;
+//                     // Mirror to shared memory immediately
+//                     smem_topk_target_ranks[k] = -1;
+//                     smem_topk_send_indices[k] = -1;
+//                 }
+//                 continue;
+//             }
+//
+//             // Only one thread per warp should increment the counter
+//             int dst_token_idx;
 //             if (thread_idx == 0)
 //             {
-//                 ptrs.topk_target_ranks[local_token_idx * TOP_K + k] = -1;
-//                 ptrs.topk_send_indices[local_token_idx * TOP_K + k] = -1;
+//                 dst_token_idx = atomicAdd(&ptrs.send_counters[target_rank], 1);
+//
+//                 ptrs.topk_target_ranks[local_token_idx * TOP_K + k] = target_rank;
+//                 ptrs.topk_send_indices[local_token_idx * TOP_K + k] = dst_token_idx;
 //                 // Mirror to shared memory immediately
-//                 smem_topk_target_ranks[k] = -1;
-//                 smem_topk_send_indices[k] = -1;
+//                 smem_topk_target_ranks[k] = target_rank;
+//                 smem_topk_send_indices[k] = dst_token_idx;
 //             }
-//             continue;
+//             already_copied |= 1ULL << target_rank;
 //         }
+//         // Sync before dispatching data
+//         ThreadingPolicy::sync();
 //
-//         // Only one thread per warp should increment the counter
-//         int dst_token_idx;
-//         if (thread_idx == 0)
-//         {
-//             dst_token_idx = atomicAdd(&ptrs.send_counters[target_rank], 1);
-//
-//             ptrs.topk_target_ranks[local_token_idx * TOP_K + k] = target_rank;
-//             ptrs.topk_send_indices[local_token_idx * TOP_K + k] = dst_token_idx;
-//             // Mirror to shared memory immediately
-//             smem_topk_target_ranks[k] = target_rank;
-//             smem_topk_send_indices[k] = dst_token_idx;
-//         }
-//         already_copied |= 1ULL << target_rank;
-//     }
-//     // Sync before dispatching data
-//     ThreadingPolicy::sync();
-//
-//     // Read staged routing once into registers per thread
-//     int topk_target_ranks[TOP_K];
-//     int topk_send_indices[TOP_K];
+//         // Read staged routing once into registers per thread
+//         int topk_target_ranks[TOP_K];
+//         int topk_send_indices[TOP_K];
 // #pragma unroll
-//     for (int k = 0; k < TOP_K; ++k)
-//     {
-//         topk_target_ranks[k] = smem_topk_target_ranks[k];
-//         topk_send_indices[k] = smem_topk_send_indices[k];
+//         for (int k = 0; k < TOP_K; ++k)
+//         {
+//             topk_target_ranks[k] = smem_topk_target_ranks[k];
+//             topk_send_indices[k] = smem_topk_send_indices[k];
+//         }
+//
+//         // Perform a single source load and TOP_K fanout per payload
+//         for (int payload_idx = 0; payload_idx < num_payloads; payload_idx++)
+//         {
+//             uint8_t const* src_data = static_cast<uint8_t const*>(ptrs.src_data_ptrs[payload_idx]);
+//             int bytes_per_token = ptrs.payload_bytes_per_token[payload_idx];
+//             uint8_t const* src_ptr = src_data + local_token_idx * bytes_per_token;
+//
+//             vectorized_dispatch<TOP_K, ThreadingPolicy>(src_ptr, bytes_per_token, rank_id, max_tokens_per_rank,
+//                 payload_idx, ptrs, topk_target_ranks, topk_send_indices);
+//         }
+//
+//         ThreadingPolicy::sync();
 //     }
-//
-//     // Perform a single source load and TOP_K fanout per payload
-//     for (int payload_idx = 0; payload_idx < num_payloads; payload_idx++)
-//     {
-//         uint8_t const* src_data = static_cast<uint8_t const*>(ptrs.src_data_ptrs[payload_idx]);
-//         int bytes_per_token = ptrs.payload_bytes_per_token[payload_idx];
-//         uint8_t const* src_ptr = src_data + local_token_idx * bytes_per_token;
-//
-//         vectorized_dispatch<TOP_K, ThreadingPolicy>(src_ptr, bytes_per_token, rank_id, max_tokens_per_rank,
-//         payload_idx,
-//             ptrs, topk_target_ranks, topk_send_indices);
-//     }
-//
-//     ThreadingPolicy::sync();
 //
 //     bool is_first_warp = threadIdx.x / warpSize == 0;
 //     if (is_first_warp)
@@ -479,8 +483,15 @@ TRTLLM_NAMESPACE_END
 //         bool is_last_token = false;
 //         if (lane_id == 0)
 //         {
-//             int cnt = atomicAdd(ptrs.local_token_counter, 1);
-//             is_last_token = cnt + 1 == local_num_tokens;
+//             if (local_num_tokens != 0)
+//             {
+//                 int cnt = atomicAdd(ptrs.local_token_counter, 1);
+//                 is_last_token = cnt + 1 == local_num_tokens;
+//             }
+//             else
+//             {
+//                 is_last_token = true;
+//             }
 //         }
 //         is_last_token = __shfl_sync(0xffffffff, is_last_token, 0);
 //
@@ -550,7 +561,7 @@ TRTLLM_NAMESPACE_END
 //     // Validate parameters
 //     TLLM_CHECK(params.top_k > 0 && params.top_k <= kMaxTopK);
 //     TLLM_CHECK(params.ep_size > 0 && params.ep_size <= kMaxRanks);
-//     TLLM_CHECK(params.local_num_tokens > 0);
+//     TLLM_CHECK(params.local_num_tokens >= 0);
 //     TLLM_CHECK(params.num_payloads > 0 && params.num_payloads <= kMaxPayloads);
 //
 //     // Prepare kernel pointers struct
@@ -595,6 +606,11 @@ TRTLLM_NAMESPACE_END
 //     if (params.one_block_per_token)
 //     {
 //         int grid_size = params.local_num_tokens;
+//         // If local_num_tokens is 0, we still need to launch a minimal kernel to participate in the synchronization.
+//         if (grid_size == 0)
+//         {
+//             grid_size = 1;
+//         }
 //         int shared_bytes = 2 * params.top_k * (int) sizeof(int);
 //         SWITCH_TOP_K(params.top_k, TOP_K,
 //             moeA2ADispatchKernel<BlockPolicy, TOP_K><<<grid_size, kBlockSize, shared_bytes, params.stream>>>(
@@ -604,6 +620,11 @@ TRTLLM_NAMESPACE_END
 //     else
 //     {
 //         int grid_size = ceilDiv(params.local_num_tokens, kWarpsPerBlock);
+//         // If local_num_tokens is 0, we still need to launch a minimal kernel to participate in the synchronization.
+//         if (grid_size == 0)
+//         {
+//             grid_size = 1;
+//         }
 //         int shared_bytes = 2 * kWarpsPerBlock * params.top_k * (int) sizeof(int);
 //         SWITCH_TOP_K(params.top_k, TOP_K,
 //             moeA2ADispatchKernel<WarpPolicy, TOP_K><<<grid_size, kBlockSize, shared_bytes, params.stream>>>(
@@ -653,7 +674,70 @@ TRTLLM_NAMESPACE_END
 //             // Load directly into the per-k accumulator; reduce across k below
 //             acc[k].load(recv_buffer + base_token + offset);
 //         }
-//         if constexpr (TOP_K == 16)
+//         // Reduce acc[TOP_K] into acc[0]
+//         if constexpr (TOP_K == 22)
+//         {
+//             T* a0 = reinterpret_cast<T*>(&acc[0]);
+//             T* a1 = reinterpret_cast<T*>(&acc[1]);
+//             T* a2 = reinterpret_cast<T*>(&acc[2]);
+//             T* a3 = reinterpret_cast<T*>(&acc[3]);
+//             T* a4 = reinterpret_cast<T*>(&acc[4]);
+//             T* a5 = reinterpret_cast<T*>(&acc[5]);
+//             T* a6 = reinterpret_cast<T*>(&acc[6]);
+//             T* a7 = reinterpret_cast<T*>(&acc[7]);
+//             T* a8 = reinterpret_cast<T*>(&acc[8]);
+//             T* a9 = reinterpret_cast<T*>(&acc[9]);
+//             T* a10 = reinterpret_cast<T*>(&acc[10]);
+//             T* a11 = reinterpret_cast<T*>(&acc[11]);
+//             T* a12 = reinterpret_cast<T*>(&acc[12]);
+//             T* a13 = reinterpret_cast<T*>(&acc[13]);
+//             T* a14 = reinterpret_cast<T*>(&acc[14]);
+//             T* a15 = reinterpret_cast<T*>(&acc[15]);
+//             T* a16 = reinterpret_cast<T*>(&acc[16]);
+//             T* a17 = reinterpret_cast<T*>(&acc[17]);
+//             T* a18 = reinterpret_cast<T*>(&acc[18]);
+//             T* a19 = reinterpret_cast<T*>(&acc[19]);
+//             T* a20 = reinterpret_cast<T*>(&acc[20]);
+//             T* a21 = reinterpret_cast<T*>(&acc[21]);
+// #pragma unroll
+//             for (int j = 0; j < elems_per_vec; ++j)
+//             {
+//                 a0[j] += a1[j];
+//                 a2[j] += a3[j];
+//                 a4[j] += a5[j];
+//                 a6[j] += a7[j];
+//                 a8[j] += a9[j];
+//                 a10[j] += a11[j];
+//                 a12[j] += a13[j];
+//                 a14[j] += a15[j];
+//                 a16[j] += a17[j];
+//                 a18[j] += a19[j];
+//                 a20[j] += a21[j];
+//             }
+// #pragma unroll
+//             for (int j = 0; j < elems_per_vec; ++j)
+//             {
+//                 a0[j] += a2[j];
+//                 a4[j] += a6[j];
+//                 a8[j] += a10[j];
+//                 a12[j] += a14[j];
+//                 a16[j] += a18[j];
+//             }
+// #pragma unroll
+//             for (int j = 0; j < elems_per_vec; ++j)
+//             {
+//                 a0[j] += a4[j];
+//                 a8[j] += a12[j];
+//                 a16[j] += a20[j];
+//             }
+// #pragma unroll
+//             for (int j = 0; j < elems_per_vec; ++j)
+//             {
+//                 a0[j] += a8[j];
+//                 a0[j] += a16[j];
+//             }
+//         }
+//         else if constexpr (TOP_K == 16)
 //         {
 //             T* a0 = reinterpret_cast<T*>(&acc[0]);
 //             T* a1 = reinterpret_cast<T*>(&acc[1]);
@@ -737,9 +821,7 @@ TRTLLM_NAMESPACE_END
 //                 a0[j] += a8[j];
 //             }
 //         }
-//
-//         // Reduce acc[TOP_K] into acc[0]
-//         if constexpr (TOP_K == 8)
+//         else if constexpr (TOP_K == 8)
 //         {
 //             T* a0 = reinterpret_cast<T*>(&acc[0]);
 //             T* a1 = reinterpret_cast<T*>(&acc[1]);
@@ -918,15 +1000,25 @@ TRTLLM_NAMESPACE_END
 //
 // template <typename T, typename ThreadingPolicy, int TOP_K>
 // __global__ void moeA2ACombineKernel(
-//     CombineKernelPointers const ptrs, // Combine-specific struct, src_data_ptrs[0] is output
+//     const CombineKernelPointers ptrs, // Combine-specific struct, src_data_ptrs[0] is output
 //     int max_tokens_per_rank, int elements_per_token, int local_num_tokens, int rank_id, int ep_size)
 // {
 //     int local_token_idx = ThreadingPolicy::token_idx();
 //     int const size_per_token = elements_per_token * sizeof(T);
 //
-//     if (local_token_idx >= local_num_tokens)
+//     if (local_num_tokens == 0)
 //     {
-//         return;
+//         // Special case: If local_num_tokens == 0,
+//         // we need to keep the threads where local_token_idx == 0 alive to participate in the synchronization.
+//         // Other threads should return.
+//         if (local_token_idx > 0)
+//             return;
+//     }
+//     else
+//     {
+//         // Threads that do not have a token to process should return.
+//         if (local_token_idx >= local_num_tokens)
+//             return;
 //     }
 //
 // #if !DISABLE_SYNC_FOR_PROFILING
@@ -977,6 +1069,9 @@ TRTLLM_NAMESPACE_END
 //     }
 //     __syncthreads();
 // #endif
+//
+//     if (local_num_tokens == 0)
+//         return;
 //
 //     // Get output location for this token (using src_data_ptrs[0] as output)
 //     T* token_output = static_cast<T*>(ptrs.src_data_ptrs[0]) + local_token_idx * elements_per_token;
@@ -1030,7 +1125,7 @@ TRTLLM_NAMESPACE_END
 //     // Validate parameters
 //     TLLM_CHECK(params.top_k > 0 && params.top_k <= kMaxTopK);
 //     TLLM_CHECK(params.ep_size > 0 && params.ep_size <= kMaxRanks);
-//     TLLM_CHECK(params.local_num_tokens > 0);
+//     TLLM_CHECK(params.local_num_tokens >= 0);
 //     TLLM_CHECK(params.elements_per_token > 0);
 //
 //     // Configure kernel launch
@@ -1038,6 +1133,15 @@ TRTLLM_NAMESPACE_END
 //     int const kWarpsPerBlock = kBlockSize / 32; // warpSize
 //     int grid_size_warp = ceilDiv(params.local_num_tokens, kWarpsPerBlock);
 //     int grid_size_block = params.local_num_tokens;
+//     // If local_num_tokens is 0, we still need to launch a minimal kernel to participate in the synchronization.
+//     if (grid_size_warp == 0)
+//     {
+//         grid_size_warp = 1;
+//     }
+//     if (grid_size_block == 0)
+//     {
+//         grid_size_block = 1;
+//     }
 //
 //     // Prepare kernel pointers struct for combine
 //     CombineKernelPointers kernel_ptrs = {}; // Zero-initialize
