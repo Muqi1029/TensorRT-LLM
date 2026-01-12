@@ -71,7 +71,7 @@ def convert_back(token_ids: List[int], tokenizer) -> str:
 
 
 def show_semantic_ids(vocab):
-    start_id = 155742
+    start_id = 151646
     ids = []
     for token, token_id in vocab.items():
         if token_id >= start_id:
