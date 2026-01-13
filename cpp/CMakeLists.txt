@@ -16,14 +16,9 @@
 #
 
 cmake_minimum_required(VERSION 3.27 FATAL_ERROR)
-
-# add extra module search paths: FindXXX.cmake
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
-
-# export compile_commands.json for lsp
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# include cmake modules
 include(resolve_dirs)
 include(parse_make_options)
 include(cuda_configuration)
@@ -73,6 +68,7 @@ option(USING_OSS_CUTLASS_MOE_GEMM "Using open sourced Cutlass moe gemm kernel"
        ON)
 option(USING_OSS_CUTLASS_ALLREDUCE_GEMM
        "Using open sourced Cutlass AR gemm kernel" ON)
+option(SKIP_SOFTMAX_STAT "Enable Statistics of Skip-Softmax" OFF)
 
 message(STATUS "ENABLE_NVSHMEM is ${ENABLE_NVSHMEM}")
 
@@ -158,12 +154,10 @@ else()
   message(FATAL_ERROR "Failed to determine TensorRT LLM version")
 endif()
 
-# create version.h file based on the python code
 configure_file(
   cmake/templates/version.h
   ${CMAKE_CURRENT_SOURCE_DIR}/include/tensorrt_llm/executor/version.h)
 
-# enable cuda
 setup_cuda_compiler()
 
 enable_language(C CXX CUDA)
@@ -249,11 +243,9 @@ set(TRT_LIB TensorRT::NvInfer)
 
 get_filename_component(TRT_LLM_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR} PATH)
 
-# add 3rdparties
 set(3RDPARTY_DIR ${TRT_LLM_ROOT_DIR}/3rdparty)
 add_subdirectory(${3RDPARTY_DIR} 3rdparty)
 
-# start to fetch codes
 if(BINDING_TYPE STREQUAL "pybind"
    OR BUILD_DEEP_EP
    OR BUILD_DEEP_GEMM)
@@ -367,6 +359,11 @@ if(ENABLE_NVSHMEM)
 else()
   add_compile_definitions($<$<COMPILE_LANGUAGE:CXX>:ENABLE_NVSHMEM=0>
                           $<$<COMPILE_LANGUAGE:CUDA>:ENABLE_NVSHMEM=0>)
+endif()
+
+if(SKIP_SOFTMAX_STAT)
+  add_compile_definitions("SKIP_SOFTMAX_STAT")
+  message(STATUS "SKIP_SOFTMAX_STAT is enabled")
 endif()
 
 # Fix linking issue with TRT 10, the detailed description about `--mcmodel` can
@@ -558,9 +555,7 @@ if(ENABLE_UCX)
   find_package(ucx)
   if(NOT ${ucx_FOUND})
     set(ENABLE_UCX 0)
-    message("DONT FIND UCX")
   else()
-    message("FOUND UCX")
     set(ucxx_source_dir ${CMAKE_BINARY_DIR}/_deps/ucxx-src)
     if(DEFINED ENV{GITHUB_MIRROR} AND NOT "$ENV{GITHUB_MIRROR}" STREQUAL "")
       if(EXISTS "${ucxx_source_dir}/fetch_rapids.cmake")
@@ -581,7 +576,7 @@ if(ENABLE_UCX)
       COMMAND
         ${CMAKE_COMMAND} -E env LIB_BUILD_DIR=${CMAKE_BINARY_DIR}/ucxx/build
         ${ucxx_source_dir}/build.sh libucxx -n
-        --cmake-args=\"-DBUILD_SHARED_LIBS=OFF
+        --cmake-args=\"-DBUILD_SHARED_LIBS=ON
         -DCMAKE_CXX_FLAGS=-D_GLIBCXX_USE_CXX11_ABI=${USE_CXX11_ABI}\"
       OUTPUT_VARIABLE UCXX_BUILD_OUTPUT
       RESULT_VARIABLE UCXX_BUILD_RESULT)
@@ -591,8 +586,8 @@ if(ENABLE_UCX)
     endif()
     find_package(ucxx REQUIRED PATHS ${CMAKE_BINARY_DIR}/ucxx/build
                  NO_DEFAULT_PATH)
-    find_package(NIXL)
   endif()
+  find_package(NIXL)
 endif()
 if(ENABLE_UCX)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DENABLE_UCX=1")
