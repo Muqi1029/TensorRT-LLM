@@ -257,20 +257,33 @@ class Deepseekv3RoutingImpl:
         if self.n_group > 1:
             if self.top_k > 8 or (num_experts / n_group) > 32 or (
                     num_experts / n_group) * self.topk_group > 128:
-                if (self.is_fused):
+                if self.is_fused:
                     warnings.warn(
                         "The configuration is not supported by the fused routing kernel. We have to use the original pytorch implementation."
                     )
                 self.is_fused = False
-        else:
-            if num_experts > 384 or self.top_k > 8:
-                if (self.is_fused):
-                    warnings.warn(
-                        "The configuration is not supported by the fused routing kernel. We have to use the original pytorch implementation."
-                    )
-                self.is_fused = False
+        elif (num_experts > 512 or (self.top_k > 8 and self.top_k != 22)
+              or self.topk_group == 1):
+            # We have special implementation for n_group == 1, top_k == 22 and num_experts == 512 for Nemotron Super v3.
+            if self.is_fused:
+                warnings.warn(
+                    "The configuration is not supported by the fused routing kernel. We have to use the original pytorch implementation."
+                )
+            self.is_fused = False
 
-        if not self.is_fused:
+        if self.n_group == 1 and self.topk_group == 1:
+            scores, scores_with_bias = self.get_scores(logits,
+                                                       e_score_correction_bias)
+            _, topk_indices = torch.topk(scores_with_bias, k=self.top_k, dim=1)
+            topk_values = torch.gather(scores, dim=1,
+                                       index=topk_indices).type_as(scores)
+
+            # Normalize and scale.
+            topk_values_sum = torch.sum(topk_values, dim=-1,
+                                        keepdim=True) + 1e-20
+            topk_values = topk_values / topk_values_sum * self.routed_scaling_factor
+            return topk_values, topk_indices
+        elif not self.is_fused:
             scores, scores_with_bias = self.get_scores(logits,
                                                        e_score_correction_bias)
             scores_shape = list(scores_with_bias.shape)
@@ -292,7 +305,11 @@ class Deepseekv3RoutingImpl:
             score_mask = group_mask.unsqueeze(-1).expand(
                 scores_shape[:-1] +
                 [n_group, scores_shape[-1] // n_group]).reshape(scores_shape)
-            scores_with_bias = scores_with_bias * score_mask
+            scores_with_bias = torch.where(
+                score_mask.bool(), scores_with_bias,
+                torch.tensor(float('-inf'),
+                             dtype=scores_with_bias.dtype,
+                             device=scores_with_bias.device))
             _, topk_idx = torch.topk(scores_with_bias,
                                      k=self.top_k,
                                      dim=-1,
