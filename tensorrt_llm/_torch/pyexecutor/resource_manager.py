@@ -1431,8 +1431,7 @@ class ResourceManager:
                     resource_manager.update_resources(scheduled_batch)
 
     def free_resources(self, request: LlmRequest):
-        for resource_type, resource_manager in reversed(
-                self.resource_managers.items()):
+        for _, resource_manager in reversed(self.resource_managers.items()):
             if hasattr(resource_manager, "free_resources"):
                 resource_manager.free_resources(request)
 

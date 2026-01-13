@@ -560,7 +560,7 @@ class ReportUtility:
         else:
             backend_info = (
                 "\n\n===========================================================\n"
-                f"= {self.rt_cfg.backend.upper()} BACKEND\n"
+                "= PYTORCH BACKEND\n"
                 "===========================================================\n"
                 f"Model:\t\t\t{engine['model']}\n"
                 f"Model Path:\t\t{engine['model_path']}\n"

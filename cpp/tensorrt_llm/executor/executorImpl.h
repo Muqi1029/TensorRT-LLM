@@ -80,12 +80,12 @@ class Executor::Impl
     using RequestList = std::list<LlmRequestPtr>;
 
     // When block reuse is enabled for context worker for disaggregated serving,
-    // we need to store the pinned block ids so that we can unpin them when
+    // we need to store the last block id so that we can unpin the block when
     // the request is finished.
     struct InTransmissionItem
     {
         LlmRequestPtr request;
-        std::vector<SizeType32> pinnedBlockIds;
+        std::optional<SizeType32> lastBlockId;
     };
 
     using InTransList = std::list<InTransmissionItem>;
