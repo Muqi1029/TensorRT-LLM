@@ -1701,7 +1701,7 @@ void TrtGptModelInflightBatching::prepareDistGenBufferAndDecoder(RequestVector c
         auto firstGenTokens = request->getContextPhaseParams().value().getFirstGenTokens();
         for (SizeType32 beam = 0; beam < reqBeamWidth; ++beam)
         {
-            std::cout << firstGenTokens.at(beam) << " => " << firstGenTokens.at(beam) + 155742 << std::endl;
+            // std::cout << firstGenTokens.at(beam) << " => " << firstGenTokens.at(beam) + 155742 << std::endl;
             request->addNewToken(firstGenTokens.at(beam) + 155742, beam);
         }
     }
