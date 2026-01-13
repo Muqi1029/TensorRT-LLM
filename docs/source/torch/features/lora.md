@@ -157,7 +157,7 @@ llm = LLM(
 
 ### YAML Configuration
 
-Create a `config.yaml` file:
+Create an `extra_llm_api_options.yaml` file:
 
 ```yaml
 lora_config:
@@ -170,7 +170,7 @@ lora_config:
 ```bash
 python -m tensorrt_llm.commands.serve
      /path/to/model \
-    --config config.yaml
+    --extra_llm_api_options extra_llm_api_options.yaml
 ```
 
 ### Client Usage
@@ -198,7 +198,7 @@ response = client.completions.create(
 
 ### YAML Configuration
 
-Create a `config.yaml` file:
+Create an `extra_llm_api_options.yaml` file:
 
 ```yaml
 lora_config:
@@ -220,5 +220,5 @@ lora_config:
 ### Run trtllm-bench
 
 ```bash
-trtllm-bench --model $model_path throughput --dataset $dataset_path --config config.yaml --num_requests 64 --concurrency 16
+trtllm-bench --model $model_path throughput --dataset $dataset_path --extra_llm_api_options extra-llm-api-options.yaml --num_requests 64 --concurrency 16
 ```

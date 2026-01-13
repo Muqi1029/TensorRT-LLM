@@ -205,12 +205,10 @@ def test_custom_model_mapping_in_parent_does_not_affect_parent():
     class Child(AutoModelForCausalLMFactory):
         pass
 
-    parent_mapping = copy.copy(AutoModelForCausalLMFactory._custom_model_mapping)
-
     custom_model_cls = MagicMock(spec=AutoModelForCausalLM)
     custom_model_cls.configure_mock(_from_config=MagicMock(side_effect=MyError))
     Child.register_custom_model_cls(
         config_cls_name=FooConfig.__name__, custom_model_cls=custom_model_cls
     )
 
-    assert AutoModelForCausalLMFactory._custom_model_mapping == parent_mapping
+    assert AutoModelForCausalLMFactory._custom_model_mapping == {}

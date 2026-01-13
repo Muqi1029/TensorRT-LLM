@@ -123,24 +123,13 @@ std::shared_ptr<ncclComm_t> getComm(std::set<int> const& group)
             if (*comm)
             {
                 // Clean up all registered resources FIRST
-                // The cleanupResources function uses a destruction guard to safely handle
-                // static destruction order issues - it will return early if the singleton
-                // is being destroyed (in which case the destructor handles cleanup proactively)
                 tensorrt_llm::common::nccl_util::NcclCommResourceManager::getInstance().cleanupResources(*comm);
 
                 // Now destroy the NCCL communicator
                 ncclResult_t result = ncclCommDestroy(*comm);
                 if (result != ncclSuccess)
                 {
-                    // Logging may fail during static destruction, so wrap in try-catch
-                    try
-                    {
-                        TLLM_LOG_WARNING("ncclCommDestroy failed with error: %d", result);
-                    }
-                    catch (...)
-                    {
-                        // Ignore logging failures during static destruction
-                    }
+                    TLLM_LOG_WARNING("ncclCommDestroy failed with error: %d", result);
                 }
 
                 // Clear the communicator value before freeing the pointer

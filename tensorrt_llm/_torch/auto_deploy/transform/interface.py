@@ -12,12 +12,11 @@ from typing import Any, Callable, Dict, Mapping, Tuple, Type, Union, final
 
 import torch.nn as nn
 from pydantic import BaseModel, Field
-from torch.fx import GraphModule, Node
+from torch.fx import GraphModule
 
 from ..models.factory import ModelFactory
 from ..shim.interface import CachedSequenceInterface
 from ..utils._graph import (
-    add_graph_input,
     canonicalize_graph,
     lift_to_meta,
     named_graphmodules,
@@ -25,6 +24,7 @@ from ..utils._graph import (
     run_shape_prop,
 )
 from ..utils.logger import ad_logger
+from ..utils.sharding_utils import ShardingTransformContainer
 
 
 class TransformError(Exception):
@@ -61,10 +61,9 @@ class Stages(Enum):
 class SharedConfig(BaseModel):
     """Global config shared between multiple transforms in the inference optimizer."""
 
-    model_config = {
-        # to provide an easy way to do config validation of child config classes with more fields
-        "extra": "allow",
-    }
+    sharding_transform_container: ShardingTransformContainer = Field(
+        default_factory=ShardingTransformContainer
+    )
     local_rank: int = Field(default=0)
     world_size: int = Field(default=1)
 
@@ -505,19 +504,6 @@ class BaseTransform(ABC):
         raise NotImplementedError(
             f"Transform {self.get_transform_key()} only supports `run_per_gm=True`."
         )
-
-    def _add_or_retrieve_input(
-        self, gm: GraphModule, cm: CachedSequenceInterface, name: str
-    ) -> Node:
-        """Add or retrieve an input node from the graph."""
-        input_nodes = gm.graph.find_nodes(op="placeholder", target=name)
-        if len(input_nodes) == 0:
-            cm.info.activate_arg(name)
-            return add_graph_input(gm, name)
-        elif len(input_nodes) == 1:
-            return input_nodes[0]
-        else:
-            raise ValueError(f"Expected exactly one input node for {name=}, got {input_nodes=}")
 
 
 class TransformRegistry:

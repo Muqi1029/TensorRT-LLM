@@ -249,7 +249,7 @@ bool getEnvUseTileSizeKv64ForTrtllmGen()
 bool getEnvEnablePDL()
 {
     static std::once_flag flag;
-    static bool enablePDL = true;
+    static bool enablePDL = false;
 
     std::call_once(flag,
         [&]()
@@ -257,18 +257,7 @@ bool getEnvEnablePDL()
             if (getSMVersion() >= 90)
             {
                 // PDL will be enabled by setting the env variables `TRTLLM_ENABLE_PDL` to `1`
-                char const* env = std::getenv("TRTLLM_ENABLE_PDL");
-                if (env)
-                {
-                    if (env[0] == '1' && env[1] == '\0')
-                    {
-                        enablePDL = true;
-                    }
-                    else if (env[0] == '0' && env[1] == '\0')
-                    {
-                        enablePDL = false;
-                    }
-                };
+                enablePDL = getBoolEnv("TRTLLM_ENABLE_PDL");
             }
         });
     return enablePDL;
@@ -290,12 +279,6 @@ bool getEnvUseNixlKvCache()
 {
     static bool const useNixlKvCache = getBoolEnv("TRTLLM_USE_NIXL_KVCACHE");
     return useNixlKvCache;
-}
-
-bool getEnvUseMooncakeKvCache()
-{
-    static bool const useMooncakeKvCache = getBoolEnv("TRTLLM_USE_MOONCAKE_KVCACHE");
-    return useMooncakeKvCache;
 }
 
 bool getEnvUseRoundRobinBlockDistForCP()
@@ -358,23 +341,6 @@ std::string getEnvNixlBackend()
             }
         });
     return nixlBackend;
-}
-
-std::string getEnvMooncakeInterface()
-{
-    static std::once_flag flag;
-    static std::string mooncakeInterface;
-
-    std::call_once(flag,
-        [&]()
-        {
-            char const* mooncake_interface = std::getenv("TRTLLM_MOONCAKE_INTERFACE");
-            if (mooncake_interface)
-            {
-                mooncakeInterface = mooncake_interface;
-            }
-        });
-    return mooncakeInterface;
 }
 
 bool getEnvDisaggLayerwise()
@@ -563,11 +529,6 @@ int getEnvMoeA2ACombineBlockSize()
 bool getEnvEplbForceGdrcopy()
 {
     return getBoolEnv("TRTLLM_EPLB_FORCE_GDRCOPY");
-}
-
-bool getEnvPrintSkipSoftmaxStat()
-{
-    return getBoolEnv("TRTLLM_PRINT_SKIP_SOFTMAX_STAT");
 }
 
 } // namespace common

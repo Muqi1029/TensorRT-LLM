@@ -100,7 +100,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void llama4_fp8_bf16_gemm_attn_scaling_
 #endif
 
 #if ENABLE_ACQBULK
-    cudaGridDependencySynchronize();
+    asm volatile("griddepcontrol.wait;" ::: "memory");
 #endif
 
     // Processing 8 elements each
@@ -250,7 +250,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void llama4_fp8_bf16_gemm_attn_scaling_
     }
 
 #if ENABLE_PREEXIT
-    cudaTriggerProgrammaticLaunchCompletion();
+    asm volatile("griddepcontrol.launch_dependents;");
 #endif
 #endif
 }

@@ -26,7 +26,6 @@
 #endif
 
 #include <algorithm>
-#include <atomic>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -140,13 +139,12 @@ public:
 
 private:
     NcclCommResourceManager() = default;
-    ~NcclCommResourceManager();
+    ~NcclCommResourceManager() = default;
 
     using ResourceEntry = std::pair<ResourceCleanupFunc, std::string>;
 
     mutable std::mutex mMutex;
     std::unordered_map<ncclComm_t, std::vector<ResourceEntry>> mCommResources;
-    std::atomic<bool> mIsDestroying{false};
 };
 
 // RAII helper to register a resource with a NCCL communicator.

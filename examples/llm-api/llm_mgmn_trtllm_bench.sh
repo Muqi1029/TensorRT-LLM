@@ -125,6 +125,6 @@ EOF
             --dataset $data_path \
             --backend pytorch \
             --tp 16 \
-            --config /tmp/pytorch_extra_args.txt \
+            --extra_llm_api_options /tmp/pytorch_extra_args.txt \
             $EXTRA_ARGS
     "

@@ -40,6 +40,13 @@ fi
 
 echo "config_file: ${config_file}"
 
+# if SLURM_NODEID is 0, save the hostname to a file
+if [ "${SLURM_NODEID}" = "0" ]; then
+    mkdir -p ${log_dir}/hostnames/
+    echo $(hostname):${port} > ${log_dir}/hostnames/${role}_${instance_id}.txt
+    echo "hostname:port saved to ${log_dir}/hostnames/${role}_${instance_id}.txt"
+fi
+
 nsys_prefix=""
 if [ "${enable_nsys}" != "true" ]; then
     echo "nsys is not enabled, start normal flow"
@@ -56,4 +63,4 @@ fi
 ${nsys_prefix} trtllm-llmapi-launch ${numa_bind_cmd} \
     trtllm-serve ${model_path} \
         --host $(hostname) --port ${port} \
-        --config ${config_file}
+        --extra_llm_api_options ${config_file}

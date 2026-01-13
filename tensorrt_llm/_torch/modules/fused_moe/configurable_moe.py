@@ -32,13 +32,11 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 
-from tensorrt_llm._torch.expert_statistic import ExpertStatistic
 from tensorrt_llm._torch.model_config import ModelConfig
 from tensorrt_llm._torch.modules.fused_moe.interface import MoE
 from tensorrt_llm._torch.modules.fused_moe.routing import BaseMoeRoutingMethod
 from tensorrt_llm._torch.utils import AuxStreamType, EventType, Fp4QuantizedTensor
 from tensorrt_llm.logger import logger
-from tensorrt_llm.models.modeling_utils import QuantConfig
 
 from .communication import (
     AllGatherReduceScatter,
@@ -108,7 +106,6 @@ class ConfigurableMoE(MoE):
         weight_loading_mode=None,
         apply_router_weight_on_input: bool = False,
         layer_idx: Optional[int] = None,
-        override_quant_config: Optional["QuantConfig"] = None,
         **kwargs,
     ):
         super().__init__(
@@ -134,8 +131,8 @@ class ConfigurableMoE(MoE):
         # ========== Create MoE Backend (Default: Cutlass) ==========
         from tensorrt_llm._torch.modules.fused_moe.create_moe import create_moe_backend, get_moe_cls
 
-        # Get MoE backend class based on override_quant_config or model_config
-        moe_cls = get_moe_cls(model_config, override_quant_config=override_quant_config)
+        # Get MoE backend class based on model_config
+        moe_cls = get_moe_cls(model_config, override_quant_config=None)
 
         # Call create_moe_backend with all necessary parameters
         # init_load_balancer=False: Prevents backend from registering itself with load balancer
@@ -148,7 +145,7 @@ class ConfigurableMoE(MoE):
         model_config.skip_create_weights_in_init = True
         model_config._frozen = True
 
-        backend = create_moe_backend(
+        self.backend = create_moe_backend(
             moe_cls=moe_cls,
             routing_method=routing_method,
             num_experts=self.num_experts,
@@ -169,14 +166,16 @@ class ConfigurableMoE(MoE):
             without_comm=True,
         )
 
-        self.validate_backend(backend)
-        self.backend = backend
-
         # Sync critical attributes from ConfigurableMoE to backend
         # ConfigurableMoE's super().__init__() was called with real layer_idx and initialized load balancer.
         # Backend was created with init_load_balancer=False and without_comm=True to avoid
         # duplicate initialization. Now sync all attributes from ConfigurableMoE to backend.
         if self.backend is not None:
+            # Add a check to WAR the issue that the backend is none during torch.compile
+            assert not torch.compiler.is_compiling(), (
+                "Backend should not be none if not in torch.compile"
+            )
+            self.backend.aux_stream_dict = self.aux_stream_dict
             self.backend.layer_idx = self.layer_idx
             self.backend.layer_idx_str = self.layer_idx_str
             self.backend.num_slots = self.num_slots
@@ -197,7 +196,7 @@ class ConfigurableMoE(MoE):
             self.backend.create_weights()
 
         # ========== Create Communication Strategy ==========
-        self.comm = self._create_comm_strategy_auto()
+        self._comm = self._create_comm_strategy_auto()
 
         # ========== Chunking Configuration ==========
         # moe_max_num_tokens is set in ModelConfig.__post_init__ if not specified
@@ -477,11 +476,8 @@ class ConfigurableMoE(MoE):
 
         # Calculate the number of rows
         num_rows = x.shape[0]
-        if self.use_dp and self.comm is not None:
-            # When using communication, dispatch will create tensors with shape:
-            # [ep_size * max_tokens_per_rank, ...] due to padding for balanced distribution
-            # So we need to allocate workspace based on this size
-            num_rows = self.mapping.moe_ep_size * max(all_rank_num_tokens)
+        if self.use_dp:
+            num_rows = sum(all_rank_num_tokens)
 
         workspaces = self.backend.get_workspaces([num_rows])
         return workspaces[0]
@@ -620,10 +616,6 @@ class ConfigurableMoE(MoE):
         else:
             token_selected_slots = token_selected_experts
 
-        if token_selected_slots is not None:
-            ExpertStatistic.set_layer(self.layer_idx)
-            ExpertStatistic.maybe_add_info(self.num_slots, token_selected_slots)
-
         # ========== Step 3.5: Communication Prepare Phase (BEFORE quantization) ==========
         # NVLINK two-sided has a prepare phase to gather EPLB statistics
 
@@ -651,10 +643,6 @@ class ConfigurableMoE(MoE):
             # Check if we should use post-quant dispatch
             # supports_post_quant_dispatch checks strategy capability for the current quant mode
             supports_post_quant = self.comm.supports_post_quant_dispatch()
-
-            # Call dummy_allreduce before allgather for load balancing debug
-            if self.enable_dummy_allreduce:
-                self.dummy_allreduce()
 
             if supports_post_quant:
                 # ===== Post-quant flow: Quantize → Dispatch =====
@@ -719,8 +707,6 @@ class ConfigurableMoE(MoE):
 
         # ========== Step 9: Communication - Combine ==========
         if self.comm is not None:
-            if self.enable_dummy_allreduce:
-                self.dummy_allreduce()
             # Use unified combine interface (reads dispatch state from strategy)
             final_hidden_states = self.comm.combine(final_hidden_states)
         else:
@@ -759,16 +745,20 @@ class ConfigurableMoE(MoE):
 
         # Always need at least workspace_0
         chunk_size_0 = (
-            self.mapping.moe_ep_size * max(all_rank_num_tokens_list[0])
+            sum(all_rank_num_tokens_list[0])
             if self.use_dp and all_rank_num_tokens_list[0] is not None
             else chunk_size_list[0]
         )
         workspace_chunk_sizes = [chunk_size_0]
 
         # Add workspace_1 if using multi-stream for alternating between streams
-        # Reuse chunk_size_0 since it's always >= chunk_size_1 (first chunk is largest)
         if use_multi_stream:
-            workspace_chunk_sizes.append(chunk_size_0)
+            chunk_size_1 = (
+                sum(all_rank_num_tokens_list[1])
+                if self.use_dp and all_rank_num_tokens_list[1] is not None
+                else chunk_size_list[1]
+            )
+            workspace_chunk_sizes.append(chunk_size_1)
 
         workspaces = self.backend.get_workspaces(workspace_chunk_sizes)
         workspace_0 = workspaces[0]
@@ -902,13 +892,23 @@ class ConfigurableMoE(MoE):
 
         return outputs
 
-    # ========== Backend Validation ==========
+    # ========== Backend Property with Validation ==========
 
-    def validate_backend(self, backend: MoE):
+    @property
+    def backend(self) -> MoE:
         """
-        Validate MOE backend.
+        Get the current MoE backend implementation
 
-        It validates that:
+        Note: Returns a FusedMoE instance (e.g., CutlassFusedMoE, CuteDslFusedMoE)
+        """
+        return self._backend
+
+    @backend.setter
+    def backend(self, backend: MoE):
+        """
+        Set MoE backend with validation
+
+        This setter validates that:
         1. Backend is not None
         2. If EPLB is enabled, backend must support routing separation
 
@@ -931,6 +931,38 @@ class ConfigurableMoE(MoE):
                 f"does not support load balancer. "
                 f"Either disable EPLB or use a backend that supports load balancer."
             )
+
+        # Set backend (validation passed)
+        self._backend = backend
+
+    @property
+    def comm(self) -> Optional[Communication]:
+        """Get the current communication strategy"""
+        return self._comm
+
+    @comm.setter
+    def comm(self, strategy: Optional[Communication]):
+        """
+        Set communication strategy with validation
+
+        This setter validates that the strategy is compatible with the configuration.
+
+        Args:
+            strategy: Communication instance to set (can be None for lazy creation)
+
+        Raises:
+            ValueError: If strategy is incompatible with current configuration
+
+        Note: Unlike backend, comm can be None (will be created lazily).
+              This allows for automatic strategy selection based on hardware.
+        """
+        # comm can be None (lazy creation)
+        if strategy is None:
+            self._comm = None
+            return
+
+        # Set strategy (validation passed)
+        self._comm = strategy
 
     # ========== Helper Methods ==========
 
@@ -959,17 +991,23 @@ class ConfigurableMoE(MoE):
         if not isinstance(self.comm, NVLinkOneSided):
             return None
 
-        if not self.backend.supports_moe_output_in_alltoall_workspace():
-            # Ensure payload_in_workspace is False if backend doesn't support it
-            self.comm.payload_in_workspace = False
-            return None
-
         # Determine workspace dtype and whether backend supports workspace output
         workspace_dtype = output_dtype
+        backend_supports_workspace = False
+
         if isinstance(self.backend, TRTLLMGenFusedMoE):
             # TRTLLMGen specific configuration
             self.comm.invalid_token_expert_id = -1
             workspace_dtype = torch.bfloat16
+            backend_supports_workspace = self.backend.has_w4a8_mxfp4_mxfp8
+        elif isinstance(self.backend, CutlassFusedMoE):
+            # Cutlass always supports workspace output with NVLinkOneSided
+            backend_supports_workspace = True
+
+        if not backend_supports_workspace:
+            # Ensure payload_in_workspace is False if backend doesn't support it
+            self.comm.payload_in_workspace = False
+            return None
 
         # Calculate runtime max tokens per rank
         assert all_rank_num_tokens is not None, (
@@ -984,6 +1022,7 @@ class ConfigurableMoE(MoE):
 
         # Dynamically enable payload_in_workspace for this forward pass
         self.comm.payload_in_workspace = True
+
         return moe_output
 
     def _get_backend_kwargs(
@@ -1057,17 +1096,12 @@ class ConfigurableMoE(MoE):
 
             # Get moe_output for NVLinkOneSided backend
             kwargs["moe_output"] = self._get_nvlink_onesided_moe_output(
-                all_rank_num_tokens=all_rank_num_tokens, output_dtype=output_dtype
+                all_rank_num_tokens, output_dtype
             )
 
         # CuteDSL-specific parameters
         elif self.backend.__class__ == CuteDslFusedMoE:
             kwargs["enable_alltoall"] = self.enable_alltoall
-
-            # Get moe_output for NVLinkOneSided backend
-            kwargs["moe_output"] = self._get_nvlink_onesided_moe_output(
-                all_rank_num_tokens=all_rank_num_tokens, output_dtype=output_dtype
-            )
 
         # DeepGemm-specific parameters
         elif self.backend.__class__ == DeepGemmFusedMoE:
@@ -1089,7 +1123,7 @@ class ConfigurableMoE(MoE):
 
             # Get moe_output for NVLinkOneSided backend
             kwargs["moe_output"] = self._get_nvlink_onesided_moe_output(
-                all_rank_num_tokens=all_rank_num_tokens, output_dtype=output_dtype
+                all_rank_num_tokens, output_dtype
             )
 
         return kwargs

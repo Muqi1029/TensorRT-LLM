@@ -17,7 +17,6 @@
 #pragma once
 
 #include "tensorrt_llm/executor/serialization.h"
-#include <atomic>
 #include <vector>
 
 namespace tensorrt_llm::executor::kv_cache
@@ -28,9 +27,8 @@ class CommState;
 struct DataContext
 {
 public:
-    explicit DataContext(int tag, std::atomic<bool> const& transferTerminate = sDefaultTransferTerminate)
+    explicit DataContext(int tag)
         : mTag{tag}
-        , mTransferTerminate(transferTerminate)
     {
     }
 
@@ -39,15 +37,8 @@ public:
         return mTag;
     }
 
-    [[nodiscard]] std::atomic<bool> const& getTransferTerminate() const noexcept
-    {
-        return mTransferTerminate;
-    }
-
 private:
-    inline static std::atomic<bool> sDefaultTransferTerminate{false};
     int const mTag;
-    std::atomic<bool> const& mTransferTerminate;
 };
 
 class Connection

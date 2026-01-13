@@ -5,8 +5,6 @@ import torch
 import torch.nn as nn
 from torch.fx import GraphModule, Node
 
-from tensorrt_llm._torch.utils import ActivationType
-
 from ...models.factory import ModelFactory
 from ...shim.interface import CachedSequenceInterface
 from ...utils.node_utils import is_op
@@ -89,15 +87,15 @@ def _quantize_moe_node(
         s1, s2, s3 = collect_scales(idx)
         args.extend([s1, s2, s3])
 
-    # Extract is_gated_mlp and act_fn from the original node
+    # Extract mlp_style and act_fn from the original node
     # These can be in args[6:] or in kwargs
-    is_gated_mlp = True  # default
-    act_fn = ActivationType.Silu  # default
+    mlp_style = "gated_mlp"  # default
+    act_fn = "silu"  # default
 
     if len(node.args) > 6:
-        is_gated_mlp = node.args[6]
-    elif "is_gated_mlp" in node.kwargs:
-        is_gated_mlp = node.kwargs["is_gated_mlp"]
+        mlp_style = node.args[6]
+    elif "mlp_style" in node.kwargs:
+        mlp_style = node.kwargs["mlp_style"]
 
     if len(node.args) > 7:
         act_fn = node.args[7]
@@ -106,7 +104,7 @@ def _quantize_moe_node(
 
     # Prepare kwargs for the quantized op
     kwargs = {
-        "is_gated_mlp": is_gated_mlp,
+        "mlp_style": mlp_style,
         "act_fn": act_fn,
     }
 

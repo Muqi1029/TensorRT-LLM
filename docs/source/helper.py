@@ -358,20 +358,15 @@ def update_version():
     docs_source_dir = Path(__file__).parent.resolve()
     md_files = list(docs_source_dir.rglob("*.md"))
 
-    # Default is to replace `release:x.y.z` placeholders; set to 0 to disable.
-    if os.environ.get("TRTLLM_DOCS_REPLACE_CONTAINER_TAG", "1") != "1":
-        return
-
     for file_path in md_files:
         with open(file_path, "r") as f:
             content = f.read()
-        updated = content.replace(
+        content = content.replace(
             "nvcr.io/nvidia/tensorrt-llm/release:x.y.z",
             f"nvcr.io/nvidia/tensorrt-llm/release:{version}",
         )
-        if updated != content:
-            with open(file_path, "w") as f:
-                f.write(updated)
+        with open(file_path, "w") as f:
+            f.write(content)
 
 
 if __name__ == "__main__":

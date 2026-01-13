@@ -119,21 +119,20 @@ struct GemmOptions
 
     GemmOptions(AllReduceAlgo allReduceAlgo, BiasType biasType, int blockK, int clusterDimX, int clusterDimY,
         int clusterDimZ, CtaSwizzleType ctaSwizzleType, tg::Dtype dtypeAcc, tg::Dtype dtypeA, tg::Dtype dtypeB,
-        tg::Dtype dtypeC, tg::Dtype dtypeMmaA, tg::Dtype dtypeMmaB, EltwiseActType eltwiseActType,
-        bool enablesEarlyExit, bool enablesDelayedEarlyExit, bool enablesGlobalPtxKnobs, int epilogueLdtmDps,
-        int epilogueLdtmBits, int epilogueTileM, int epilogueTileN, bool fuseUtccpWithUtcmma,
-        bool gridTriggerSecondaryA, bool gridTriggerSecondaryB, bool gridWaitForPrimaryEarlyExit,
-        bool gridWaitForPrimaryA, bool gridWaitForPrimaryB, bool hoistLoadTaskInit, bool hoistMmaTaskTryWaits, int k,
-        KernelTraits kernelTraits, MatrixLayout layoutA, MatrixLayout layoutB, int m, int mmaK, tg::MmaKind mmaKind,
-        int mmaM, int mmaN, bool mockAllReduce, int n, int numEpilogueWarps, int numRegsCastAWarps,
-        int numRegsCopySfLdsSttm, int numRegsPerThreadEpilogueWarp, int numRegsPerThreadNonEpilogueWarp,
-        int numSlicesForSplitK, int numSlicesForSliceK, int numStages, int numStagesMma, int numStagesMmaWithinWorkTile,
-        int numStagesMmaAcrossWorkTile, int numStagesWorkId, bool outputDebugTensors, bool patchF2fp,
-        std::optional<int32_t> sfBlockSizeA, tg::SfLayout sfLayoutA, tg::SfLayout sfLayoutB, tg::SfLayout sfLayoutC,
-        int sfReshapeFactor, bool sliceK, SplitK splitK, int tileK, int tileM, int tileN, TileScheduler tileScheduler,
-        bool transposeMmaOutput, bool useCustomMmaSchedule, bool useDeepSeekFp8,
-        bool useHoistTryWaitForCustomMmaSchedule, bool useMaxTmemOverlap, bool usePerTokenSfA, bool usePerTokenSfB,
-        bool useShuffledMatrixA, bool useTmaStore, bool useTwoTmaLoadWarps, bool useTwoMmaWarps,
+        tg::Dtype dtypeC, tg::Dtype dtypeMmaA, tg::Dtype dtypeMmaB, bool enablesEarlyExit, bool enablesDelayedEarlyExit,
+        bool enablesGlobalPtxKnobs, int epilogueLdtmDps, int epilogueLdtmBits, int epilogueTileM, int epilogueTileN,
+        bool fuseUtccpWithUtcmma, bool gridTriggerSecondaryA, bool gridTriggerSecondaryB,
+        bool gridWaitForPrimaryEarlyExit, bool gridWaitForPrimaryA, bool gridWaitForPrimaryB, bool hoistLoadTaskInit,
+        bool hoistMmaTaskTryWaits, int k, KernelTraits kernelTraits, MatrixLayout layoutA, MatrixLayout layoutB, int m,
+        int mmaK, tg::MmaKind mmaKind, int mmaM, int mmaN, bool mockAllReduce, int n, int numEpilogueWarps,
+        int numRegsCastAWarps, int numRegsCopySfLdsSttm, int numRegsPerThreadEpilogueWarp,
+        int numRegsPerThreadNonEpilogueWarp, int numSlicesForSplitK, int numSlicesForSliceK, int numStages,
+        int numStagesMma, int numStagesMmaWithinWorkTile, int numStagesMmaAcrossWorkTile, int numStagesWorkId,
+        bool outputDebugTensors, bool patchF2fp, std::optional<int32_t> sfBlockSizeA, tg::SfLayout sfLayoutA,
+        tg::SfLayout sfLayoutB, tg::SfLayout sfLayoutC, int sfReshapeFactor, bool sliceK, SplitK splitK, int tileK,
+        int tileM, int tileN, TileScheduler tileScheduler, bool transposeMmaOutput, bool useCustomMmaSchedule,
+        bool useDeepSeekFp8, bool useHoistTryWaitForCustomMmaSchedule, bool useMaxTmemOverlap, bool usePerTokenSfA,
+        bool usePerTokenSfB, bool useShuffledMatrixA, bool useTmaStore, bool useTwoTmaLoadWarps, bool useTwoMmaWarps,
         bool useUnrollLoop2xForMma, int validM, int validN, int validK, int worldSize)
         : mAllReduceAlgo{allReduceAlgo}
         , mBiasType{biasType}
@@ -148,7 +147,6 @@ struct GemmOptions
         , mDtypeC{dtypeC}
         , mDtypeMmaA{dtypeMmaA}
         , mDtypeMmaB{dtypeMmaB}
-        , mEltwiseActType{eltwiseActType}
         , mEnablesEarlyExit{enablesEarlyExit}
         , mEnablesDelayedEarlyExit{enablesDelayedEarlyExit}
         , mEnablesGlobalPtxKnobs{enablesGlobalPtxKnobs}
@@ -245,8 +243,6 @@ struct GemmOptions
     tg::Dtype mDtypeMmaA{tg::Dtype::Void};
     // Data type of the B matrix for the MMA, if different from the input type.
     tg::Dtype mDtypeMmaB{tg::Dtype::Void};
-    // The type of activation.
-    EltwiseActType mEltwiseActType{EltwiseActType::None};
     // Whether to enable early exit.
     bool mEnablesEarlyExit{false};
     // Whether to enable delayed early exit to overlap
@@ -492,9 +488,6 @@ inline std::string dumpOptions(GemmOptions const& options, bool dumpRuntimeParam
        << "," << std::endl;
     ss << "mDtypeMmaB="
        << "trtllm::gen::Dtype(" << static_cast<int32_t>(options.mDtypeMmaB) << ")"
-       << "," << std::endl;
-    ss << "mEltwiseActType="
-       << "gemm::EltwiseActType(" << static_cast<int32_t>(options.mEltwiseActType) << ")"
        << "," << std::endl;
     ss << "mEnablesEarlyExit=" << options.mEnablesEarlyExit << "," << std::endl;
     ss << "mEnablesDelayedEarlyExit=" << options.mEnablesDelayedEarlyExit << "," << std::endl;
@@ -818,23 +811,19 @@ inline bool checkAndUpdateGemmOptions(
         }
     }
 
-    if (options.mMmaKind == tg::MmaKind::Fp8Fp6Fp4)
+    if ((options.mMmaKind == tg::MmaKind::Fp8Fp6Fp4 || options.mMmaKind == tg::MmaKind::MxFp8Fp6Fp4)
+        && options.mMmaK != 32)
     {
-        int mmaK = 32;
-
-        if (options.mMmaK != mmaK)
+        TLLM_LOG_WARNING("Unsupported MmaK (", options.mMmaK, ") for MmaKind=", gemm::toString(options.mMmaKind),
+            ". Setting MmaK to 32");
+        if (updateOptions)
         {
-            TLLM_LOG_WARNING("Unsupported MmaK (", options.mMmaK, ") for MmaKind=", gemm::toString(options.mMmaKind),
-                ". Setting MmaK to ", mmaK);
-            if (updateOptions)
-            {
-                options.mMmaK = mmaK;
-                options.mTileK = std::max(options.mMmaK, options.mTileK);
-            }
-            else
-            {
-                return false;
-            }
+            options.mMmaK = 32;
+            options.mTileK = std::max(options.mMmaK, options.mTileK);
+        }
+        else
+        {
+            return false;
         }
     }
 
@@ -865,7 +854,7 @@ inline bool checkAndUpdateGemmOptions(
             "dp", options.mEpilogueLdtmBits, "bit.");
     }
 
-    // Constraints for NvFp4, MxFp8, and MxFp4.
+    // Constraints for NvFp4 and MxFp8.
     if ((options.mMmaKind == tg::MmaKind::MxFp4NvFp4 || options.mMmaKind == tg::MmaKind::MxFp8Fp6Fp4
             || options.mDtypeC == tg::Dtype::MxE4m3)
         && options.mMmaM != 128)
@@ -905,12 +894,15 @@ inline bool checkAndUpdateGemmOptions(
         int mmaK = 32;
         if (options.mMmaKind == tg::MmaKind::MxFp4NvFp4)
         {
-            mmaK = 64;
             if (options.mMmaK == 96)
             {
                 mmaK = 96;
                 TLLM_CHECK_ERROR(options.mTileK == 768, "When mmaK == 96, only tileK == 768 is supported");
                 TLLM_CHECK_ERROR(options.mTileN <= 128, "When mmaK == 96, only tileN <= 128 is supported");
+            }
+            else
+            {
+                mmaK = 64;
             }
         }
         if (options.mMmaK != mmaK)
@@ -1625,15 +1617,6 @@ inline bool getDoesScaleAb(tg::Dtype dtypeA, tg::Dtype dtypeB, bool useDeepSeekF
     bool const doesScaleAb{dtypeA == tg::Dtype::E2m1 || dtypeB == tg::Dtype::E2m1
         || ((dtypeA == tg::Dtype::E4m3 || dtypeB == tg::Dtype::E4m3) && !useDeepSeekFp8)};
     return doesScaleAb;
-}
-
-//////////////////////////////////////////////////////////////////////////////////////////////////
-
-inline bool getDoesScaleAct(tg::Dtype dtypeA, tg::Dtype dtypeB, bool useDeepSeekFp8, EltwiseActType eltwiseActType)
-{
-    // Only non-linear activations require separate scaleAct.
-    bool const isLinearAct = eltwiseActType == EltwiseActType::None;
-    return !isLinearAct && getDoesScaleAb(dtypeA, dtypeB, useDeepSeekFp8);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -246,16 +246,14 @@ class TestTorchBackendAttention:
 
         if seq_len == 1:
             # Generate phase: [num_prefill, num_prefill_tokens, num_decode]
-            batch_info_host = torch.tensor(
-                [0, 0, batch_size], device=self.device, dtype=torch.int32
-            )
+            batch_info = torch.tensor([0, 0, batch_size], device=self.device, dtype=torch.int32)
             seq_start = torch.arange(batch_size, device=self.device, dtype=torch.int32)
             q_flat = q.view(batch_size, seq_len, -1)
             k_flat = k.view(batch_size, seq_len, -1)
             v_flat = v.view(batch_size, seq_len, -1)
         else:
             # Context phase: [num_prefill, num_prefill_tokens, num_decode]
-            batch_info_host = torch.tensor(
+            batch_info = torch.tensor(
                 [batch_size, batch_size * seq_len, 0], device=self.device, dtype=torch.int32
             )
             seq_start = torch.arange(
@@ -269,7 +267,7 @@ class TestTorchBackendAttention:
             "q": q_flat,
             "k": k_flat,
             "v": v_flat,
-            "batch_info_host": batch_info_host,
+            "batch_info": batch_info,
             "seq_len": seq_len_tensor,
             "input_pos": input_positions,
             "cache_loc": cache_loc,
@@ -288,7 +286,7 @@ class TestTorchBackendAttention:
             data["k"],
             data["v"],
             # STANDARD METADATA
-            data["batch_info_host"],
+            data["batch_info"],
             data["seq_len"],
             data["input_pos"],
             data["cache_loc"],

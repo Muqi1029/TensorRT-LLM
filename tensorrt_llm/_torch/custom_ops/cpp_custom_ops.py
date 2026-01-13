@@ -15,18 +15,18 @@ def _register_fake():
 
     @torch.library.register_fake("trtllm::allreduce")
     def allreduce(
-        input: torch.Tensor,
-        residual: Optional[torch.Tensor],
-        norm_weight: Optional[torch.Tensor],
-        scale: Optional[torch.Tensor],
-        bias: Optional[torch.Tensor],
-        workspace: Optional[torch.Tensor],
-        group: List[int],
-        strategy: int,
-        op: int,
-        eps: float,
-        trigger_completion_at_end: bool,
-    ) -> List[torch.Tensor]:
+        input,
+        residual,
+        norm_weight,
+        scale,
+        bias,
+        workspace,
+        group,
+        strategy,
+        op,
+        eps,
+        trigger_completion_at_end,
+    ):
         from tensorrt_llm.functional import AllReduceFusionOp
         if op == int(AllReduceFusionOp.NONE):
             return [torch.empty_like(input)]
@@ -61,19 +61,19 @@ def _register_fake():
 
     @torch.library.register_fake("trtllm::allreduce_pg")
     def _(
-        input: torch.Tensor,
-        residual: Optional[torch.Tensor],
-        norm_weight: Optional[torch.Tensor],
-        scale: Optional[torch.Tensor],
-        bias: Optional[torch.Tensor],
-        workspace: Optional[torch.Tensor],
-        group: List[int],
-        rank: int,
+        input,
+        residual,
+        norm_weight,
+        scale,
+        bias,
+        workspace,
+        group,
+        rank,
         pg,
-        strategy: int,
-        op: int,
-        eps: float,
-        trigger_completion_at_end: bool,
+        strategy,
+        op,
+        eps,
+        trigger_completion_at_end,
     ):
         return allreduce(input, residual, norm_weight, scale, bias, workspace,
                          group, strategy, op, eps, trigger_completion_at_end)
@@ -201,7 +201,7 @@ def _register_fake():
     def _(input, force_applying_finalize):
         return torch.empty_like(input)
 
-    @torch.library.register_fake("trtllm::fp8_block_scaling_gemm_impl")
+    @torch.library.register_fake("trtllm::fp8_block_scaling_gemm")
     def _(a, b, a_scale, b_scale):
         m = a.shape[0]
         n = b.shape[0]
@@ -751,17 +751,6 @@ def _register_fake():
             input_list[i].new_empty((num_ranks, ) + i.shape)
             for i in range(0, len(input_list), num_ranks)
         ]
-
-    @torch.library.register_fake("trtllm::alltoall_helix_native")
-    def _(partial_o, softmax_stats, workspace, cp_rank, cp_size):
-        # Returns outputs with same shapes as inputs
-        return partial_o.new_empty(partial_o.shape), softmax_stats.new_empty(
-            softmax_stats.shape)
-
-    @torch.library.register_fake("trtllm::initialize_helix_workspace")
-    def _(workspace, cp_rank, cp_size):
-        # This op initializes workspace in-place and returns nothing
-        return None
 
     @torch.library.register_fake("trtllm::helix_post_process")
     def _(gathered_o, gathered_stats, scale):

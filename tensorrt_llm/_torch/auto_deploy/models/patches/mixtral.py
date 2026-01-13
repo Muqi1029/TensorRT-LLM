@@ -7,38 +7,19 @@ from transformers.models.mixtral.modeling_mixtral import MixtralSparseMoeBlock
 
 from ...export.interface import BaseExportPatch, ExportPatchRegistry
 
-# Import SiLUActivation for compatibility check
-try:
-    from transformers.activations import SiLUActivation
-
-    _SILU_TYPES = (nn.SiLU, SiLUActivation)
-except ImportError:
-    _SILU_TYPES = (nn.SiLU,)
-
-
-def _is_silu_activation(act_fn) -> bool:
-    """Check if activation function is SiLU or equivalent."""
-    return isinstance(act_fn, _SILU_TYPES)
-
 
 def _forward_moe(self: MixtralSparseMoeBlock, hidden_states: torch.Tensor):
     # check if we can apply the patch
-    unsupported_reasons = []
-    if not all(_is_silu_activation(expert.act_fn) for expert in self.experts):
-        unsupported_reasons.append("expert activation is not SiLU")
+    use_original_forward = False
+    if not all(isinstance(expert.act_fn, nn.SiLU) for expert in self.experts):
+        use_original_forward = True
 
     if any(getattr(mod, "bias", None) is not None for mod in self.experts.modules()):
-        unsupported_reasons.append("expert modules have bias")
+        use_original_forward = True
 
-    # Raise informative error for unsupported configurations
-    # (fallback to original forward is not export-compatible with transformers >= 4.57.1)
-    if unsupported_reasons:
-        raise NotImplementedError(
-            f"MixtralSparseMoeBlock forward patch does not support this model configuration: "
-            f"{', '.join(unsupported_reasons)}. "
-            f"The original transformers forward uses torch.nonzero() and tensor indexing "
-            f"which are not compatible with torch.export on meta tensors."
-        )
+    # rely on original forward instead
+    if use_original_forward:
+        return self._original_forward(hidden_states)
 
     batch_size, sequence_length, hidden_dim = hidden_states.shape
     if self.training and self.jitter_noise > 0:

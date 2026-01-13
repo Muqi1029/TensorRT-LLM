@@ -334,5 +334,4 @@ the current progress in AutoDeploy and where you can help.
 
 ## Disclaimer
 
-This project is under active development and is currently released as beta feature. The code is
-subject to change, and may include backward-incompatible updates.
+This project is under active development and is currently in a prototype stage. The code is experimental, subject to change, and may include backward-incompatible updates. While we strive for correctness, there are no guarantees regarding functionality, stability, or reliability.

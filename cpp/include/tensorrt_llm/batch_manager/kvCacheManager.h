@@ -380,7 +380,6 @@ public:
         , mBeamWidth(beamWidth)
         , mKvCacheRetentionConfig(std::move(kvCacheRetentionConfig))
         , mNumFrontBlocksRemoved(0)
-        , mCurrentPrepopulatedPromptLen(std::numeric_limits<SizeType32>::max())
     {
         auto const numWindowSizes = windowSizeToMetadata.size();
         mCacheBlockIds.reserve(numWindowSizes);
@@ -501,20 +500,6 @@ public:
         return mKvCacheRetentionConfig.getDirectory();
     }
 
-    [[nodiscard]] SizeType32 getCurrentPrepopulatedPromptLen() const
-    {
-        return mCurrentPrepopulatedPromptLen;
-    }
-
-    void setCurrentPrepopulatedPromptLen(SizeType32 currentPrepopulatedPromptLen)
-    {
-        TLLM_CHECK_WITH_INFO(currentPrepopulatedPromptLen <= mCurrentPrepopulatedPromptLen,
-            "currentPrepopulatedPromptLen must be updated non-increasingly due to the "
-            "assumption that smaller window sizes have shorter or equal"
-            "currentPrepopulatedPromptLen in WindowSizeManager::loadOrAllocateBlocks.");
-        mCurrentPrepopulatedPromptLen = currentPrepopulatedPromptLen;
-    }
-
 private:
     // Request id of the sequence
     LlmRequest::RequestIdType mRequestId;
@@ -532,8 +517,6 @@ private:
     SizeType32 mNumFrontBlocksRemoved;
     // Set of used blocks by the sequence
     std::set<KVCacheBlock::IdType> mUsedBlocks;
-    // Current prepopulated prompt length
-    SizeType32 mCurrentPrepopulatedPromptLen;
 };
 
 // attach metadata to a pool pointer

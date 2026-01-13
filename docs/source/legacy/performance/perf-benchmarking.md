@@ -415,17 +415,11 @@ Total Latency (ms):             13525.6862
 
 ### Running with the PyTorch Workflow
 
-```{eval-rst}
-.. include:: ../../_includes/note_sections.rst
-   :start-after: .. start-note-config-flag-alias
-   :end-before: .. end-note-config-flag-alias
-```
-
 To benchmark the PyTorch backend (`tensorrt_llm._torch`), use the following command with [dataset](#preparing-a-dataset) generated from previous steps. With the PyTorch flow, you will not need to
 run `trtllm-bench build`; the `throughput` benchmark initializes the backend by tuning against the
 dataset provided via `--dataset` (or the other build mode settings described [above](#other-build-modes)).
 Note that CUDA graph is enabled by default. You can add additional pytorch config with
-`--config` followed by the path to a YAML file. For more details, please refer to the
+`--extra_llm_api_options` followed by the path to a YAML file. For more details, please refer to the
 help text by running the command with `--help`.
 
 ```{tip}
@@ -517,7 +511,7 @@ The generated dataset will include LoRA request metadata. Below is an example of
 
 **LoRA Configuration**
 
-Create a `config.yaml` file with LoRA configuration:
+Create an `extra-llm-api-options.yaml` file with LoRA configuration:
 
 ```yaml
 lora_config:
@@ -541,7 +535,7 @@ lora_config:
 trtllm-bench --model /path/to/base/model \
   throughput \
   --dataset synthetic_lora_data.json \
-  --config config.yaml
+  --extra_llm_api_options extra-llm-api-options.yaml
 ```
 
 ```{note}

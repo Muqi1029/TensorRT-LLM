@@ -46,7 +46,7 @@ CUTLASS_DEVICE
 void launch_dependent_grids()
 {
 #if (defined(CUTLASS_GDC_ENABLED))
-    cudaTriggerProgrammaticLaunchCompletion();
+    asm volatile("griddepcontrol.launch_dependents;");
 #endif
 }
 
@@ -57,7 +57,7 @@ CUTLASS_DEVICE
 void wait_on_dependent_grids()
 {
 #if (defined(CUTLASS_GDC_ENABLED))
-    cudaGridDependencySynchronize();
+    asm volatile("griddepcontrol.wait;");
 #endif
 }
 

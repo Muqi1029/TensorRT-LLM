@@ -1,13 +1,12 @@
-# AutoDeploy (Beta)
+# AutoDeploy (Prototype)
 
 ```{note}
-This project is under active development and is currently released as beta feature. The code is
-subject to change, and may include backward-incompatible updates.
+This project is under active development and is currently in a prototype stage. The code is a prototype, subject to change, and may include backward-incompatible updates. While we strive for correctness, there are no guarantees regarding functionality, stability, or reliability.
 ```
 
 ## Seamless Model Deployment from PyTorch to TensorRT LLM
 
-AutoDeploy is designed to simplify and accelerate the deployment of PyTorch models, including off-the-shelf models such as those from the Hugging Face Transformers library, to TensorRT LLM.
+AutoDeploy is a prototype designed to simplify and accelerate the deployment of PyTorch models, including off-the-shelf models such as those from the Hugging Face Transformers library, to TensorRT LLM.
 
 ![AutoDeploy overview](../../media/ad_overview.png)
 <sub><em>AutoDeploy overview and relation with TensorRT LLM's LLM API</em></sub>

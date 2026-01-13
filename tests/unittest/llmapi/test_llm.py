@@ -4,7 +4,6 @@ import gc
 import json
 import os
 import sys
-import time
 
 # Required for test_generate_with_seed to pass.
 # See the discussion in https://github.com/NVIDIA/TensorRT-LLM/pull/4264#issuecomment-2943269891
@@ -2194,7 +2193,6 @@ def llm_get_stats_test_harness(tp_size: int = 1,
                                    sampling_params=sampling_params):
             print(output)
 
-        time.sleep(2)
         results = llm.get_stats(2)
 
         validate_stats(results=results,
@@ -2205,7 +2203,7 @@ def llm_get_stats_test_harness(tp_size: int = 1,
                        enable_chunked_prefill=enable_chunked_prefill,
                        enable_iter_req_stats=enable_iter_req_stats)
 
-        assert not llm.get_stats(0.5)
+        assert not llm.get_stats(2)
 
         # test that IterationResult()._done is properly set
         _ = llm.generate(prompts, sampling_params=sampling_params)
@@ -2342,9 +2340,8 @@ def llm_get_stats_async_test_harness(tp_size: int = 1,
         async def task1(repetition_index: int):
             results = []
             await asyncio.sleep(
-                4)  # ensure there's stats to collect for the assertion
-            async for stats in llm.get_stats_async(
-                    10):  # it will return immediately
+                3)  # ensure there's stats to collect for the assertion
+            async for stats in llm.get_stats_async(timeout=2):
                 results.append(stats)
 
             assert results

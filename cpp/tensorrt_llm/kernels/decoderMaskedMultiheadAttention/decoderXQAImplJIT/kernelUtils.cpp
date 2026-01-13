@@ -96,14 +96,8 @@ bool supportConfigQGMMA(XQAParams const& xqaParams, int SM, bool forConfigurePlu
     {
         return false;
     }
-    if (!contains({DATA_TYPE_FP16, DATA_TYPE_BF16, DATA_TYPE_E4M3}, xqaParams.kv_cache_data_type))
+    if (xqaParams.kv_cache_data_type != DATA_TYPE_E4M3)
     {
-        return false;
-    }
-    bool const is_skip_softmax = xqaParams.skip_softmax_threshold_scale_factor != 0;
-    if (!is_skip_softmax && xqaParams.kv_cache_data_type != DATA_TYPE_E4M3)
-    {
-        // Only use hopper kernel with fp16/bf16 kv cache data type when skip softmax is enabled
         return false;
     }
     if (xqaParams.beam_width != 1)
@@ -174,11 +168,6 @@ bool supportConfigHMMA(XQAParams const& xqaParams, int SM, bool forConfigurePlug
     {
         return false;
     }
-    bool const is_skip_softmax = xqaParams.skip_softmax_threshold_scale_factor != 0;
-    if (is_skip_softmax)
-    {
-        return false;
-    }
     return true;
 }
 
@@ -209,11 +198,6 @@ bool supportConfigMLA(XQAParams const& xqaParams, int SM, bool forConfigurePlugi
         return false;
     }
     if (xqaParams.paged_kv_cache && !contains({8, 16, 32, 64, 128}, xqaParams.tokens_per_block))
-    {
-        return false;
-    }
-    bool const is_skip_softmax = xqaParams.skip_softmax_threshold_scale_factor != 0;
-    if (is_skip_softmax)
     {
         return false;
     }

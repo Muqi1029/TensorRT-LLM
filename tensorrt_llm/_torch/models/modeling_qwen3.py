@@ -48,11 +48,7 @@ class Qwen3Attention(QKNormRoPEAttention):
             pos_embd_params = PositionalEmbeddingParams(
                 type=PositionEmbeddingType.from_string(pos_type),
                 rope=RopeParams.from_config(config),
-                mrope_section=config.rope_scaling.get("mrope_section", None),
-                mrope_interleaved=config.rope_scaling.get(
-                    "mrope_interleaved", False))
-            if config.rope_scaling.get("mrope_interleaved", False):
-                fuse_qk_norm_rope = False
+            )
         else:
             pos_embd_params = PositionalEmbeddingParams(
                 type=PositionEmbeddingType.rope_gpt_neox,
@@ -68,7 +64,6 @@ class Qwen3Attention(QKNormRoPEAttention):
             pos_embd_params=pos_embd_params,
             fuse_qk_norm_rope=fuse_qk_norm_rope,
             layer_idx=layer_idx,
-            rope_fusion=not getattr(config, 'disable_fuse_rope', False),
             dtype=config.torch_dtype,
             dense_bias=getattr(config, "attention_bias", None),
             config=model_config,
@@ -121,8 +116,6 @@ class Qwen3DecoderLayer(DecoderLayer):
         attn_metadata: AttentionMetadata,
         residual: Optional[torch.Tensor],
         spec_metadata: Optional[SpecMetadata] = None,
-        mrope_config: Optional[dict] = None,
-        deepstack_embeds: Optional[list[torch.Tensor]] = None,
         **kwargs,
     ) -> torch.Tensor:
         if residual is None:
@@ -139,7 +132,6 @@ class Qwen3DecoderLayer(DecoderLayer):
             attn_metadata=attn_metadata,
             all_reduce_params=AllReduceParams(
                 enable_allreduce=not self.disable_allreduce),
-            mrope_config=mrope_config,
             **kwargs,
         )
 
@@ -152,11 +144,7 @@ class Qwen3DecoderLayer(DecoderLayer):
             final_all_reduce_params=AllReduceParams(
                 enable_allreduce=not self.disable_allreduce),
             cutlass_min_latency_mode=False,
-            **kwargs,
         )
-        if deepstack_embeds is not None and self.layer_idx in range(
-                len(deepstack_embeds)):
-            residual = residual + deepstack_embeds[self.layer_idx]
 
         if spec_metadata is not None:
             spec_metadata.maybe_capture_hidden_states(self.layer_idx,
@@ -198,9 +186,6 @@ class Qwen3Model(DecoderModel):
         position_ids: Optional[torch.IntTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
         spec_metadata: Optional[SpecMetadata] = None,
-        mrope_config: Optional[dict] = None,
-        # args for deepstack
-        deepstack_embeds: Optional[list[torch.Tensor]] = None,
         **kwargs,
     ) -> torch.Tensor:
         if (input_ids is None) ^ (inputs_embeds is not None):
@@ -221,9 +206,6 @@ class Qwen3Model(DecoderModel):
                 attn_metadata=attn_metadata,
                 residual=residual,
                 spec_metadata=spec_metadata,
-                mrope_config=mrope_config,
-                deepstack_embeds=deepstack_embeds,
-                **kwargs,
             )
 
         hidden_states, _ = self.norm(hidden_states, residual)

@@ -158,7 +158,6 @@ class Mamba2Mixer(nn.Module):
         hidden_states: torch.Tensor,
         attn_metadata: AttentionMetadata,
         mamba_metadata: Mamba2Metadata,
-        **kwargs,
     ) -> torch.Tensor:
 
         # calculate split size

@@ -105,8 +105,7 @@ CubinObj CompileEngine::compile() const
         // scratch in this case.
         /*use_input_kv=*/applyRoPEInXqaKernel,
         /*rope_style=*/ropeStyle,
-        /*is_spec_dec_tree=*/mXqaParams.is_spec_dec_tree,
-        /*use_skip_softmax_attn=*/mXqaParams.skip_softmax_threshold_scale_factor != 0};
+        /*is_spec_dec_tree=*/mXqaParams.is_spec_dec_tree};
     if (context.kernel_type == TLLM_XQA_JIT_MLA)
     {
         auto const& c = context;

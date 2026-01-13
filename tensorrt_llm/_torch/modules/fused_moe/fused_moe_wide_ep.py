@@ -159,6 +159,10 @@ class WideEPMoE(MoE):
         if not model_config.skip_create_weights_in_init:
             self.create_weights()
 
+        # Debug function for eliminating imbalance during performance analysis.
+        self.enable_dummy_allreduce = os.environ.get(
+            "TRTLLM_ENABLE_DUMMY_ALLREDUCE", "0") == "1"
+
         # MoE op will be lazily initialized when first accessed (see moe_op_impl property)
         self._moe_op_impl = None
 
@@ -338,6 +342,16 @@ class WideEPMoE(MoE):
             self._moe_op_impl = MoEOpSelector.select_op(self)
         return self._moe_op_impl
 
+    def dummy_allreduce(self):
+        """
+        Debug function for eliminating imbalance during performance analysis.
+        Creates a small dummy tensor and performs allreduce to synchronize processes
+        and eliminate timing imbalances for more accurate profiling measurements.
+        """
+        dummy_tensor = torch.zeros(4, dtype=torch.float32, device='cuda')
+        dummy_tensor = self.all_reduce(dummy_tensor)
+        return dummy_tensor
+
     def reducescatter_or_allreduce(
         self,
         inputs,
@@ -367,13 +381,6 @@ class WideEPMoE(MoE):
             return self.has_fp8_qdq or self.has_nvfp4 or self.has_w4afp8
         else:
             return False
-
-    def is_low_precision_combine_supported(self):
-        if not self.use_low_precision_combine:
-            return False
-        if self.alltoall_method_type == AlltoallMethodType.DeepEPLowLatency:
-            return self.has_fp8_qdq or self.has_nvfp4 or self.has_w4afp8
-        return False
 
     def forward_chunk(
         self,
@@ -664,7 +671,8 @@ class WideEPMoE(MoE):
                 final_hidden_states = final_hidden_states.view(
                     self.expert_size_per_partition,
                     num_tokens_per_expert_for_fused_moe, self.hidden_size)
-                if self.is_low_precision_combine_supported():
+                if self.use_low_precision_combine:
+                    assert self.has_nvfp4 or self.has_w4afp8 or self.has_fp8_qdq, "Low precision combine only supports nvfp4, w4afp8 and fp8 qdq"
                     precision = "fp8"
                     global_scales = None
                     if self.has_nvfp4:

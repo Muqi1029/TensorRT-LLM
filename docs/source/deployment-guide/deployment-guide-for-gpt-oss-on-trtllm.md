@@ -26,10 +26,9 @@ There are multiple MOE backends inside TensorRT LLM. Here are the support matrix
 | Device                | Activation Type | MoE Weights Type | MoE Backend | Use Case                       |
 |---------------------- |-----------------|------------------|-------------|--------------------------------|
 | B200/GB200/B300/GB300 | MXFP8           | MXFP4            | TRTLLM      | Low Latency and Max Throughput |
-|         H200          | BF16            | MXFP4            | TRITON      | Low Latency and Max Throughput |
 
 The default moe backend is `CUTLASS`, so for the best possible perf, one must set the `moe_config.backend` explicitly to run the model.
-For Blackwell, `CUTLASS` was better for max throughput at first but now we have optimized `TRTLLM` moe to be universally faster. For Hopper, Triton is the faster backend.
+`CUTLASS` was better for max throughput at first but now we have optimized `TRTLLM` moe to be universally faster.
 
 ## Deployment Steps
 
@@ -114,7 +113,7 @@ append: EOF
 Below is an example command to launch the TensorRT LLM server with the GPT-OSS model from within the container. The command is specifically configured for the 1024/1024 Input/Output Sequence Length test. The explanation of each flag is shown in the “LLM API Options (YAML Configuration)” section.
 
 ```shell
-trtllm-serve openai/gpt-oss-120b --host 0.0.0.0 --port 8000 --config ${EXTRA_LLM_API_FILE}
+trtllm-serve openai/gpt-oss-120b --host 0.0.0.0 --port 8000 --extra_llm_api_options ${EXTRA_LLM_API_FILE}
 ```
 
 After the server is set up, the client can now send prompt requests to the server and receive results.
@@ -123,7 +122,7 @@ After the server is set up, the client can now send prompt requests to the serve
 
 <!-- TODO: this section is duplicated across the deployment guides; they should be consolidated to a central file and imported as needed, or we can remove this and link to LLM API reference -->
 
-These options provide control over TensorRT LLM's behavior and are set within the YAML file passed to the `trtllm-serve` command via the `--config` argument.
+These options provide control over TensorRT LLM's behavior and are set within the YAML file passed to the `trtllm-serve` command via the `--extra_llm_api_options` argument.
 
 #### `tensor_parallel_size`
 
@@ -140,11 +139,11 @@ These options provide control over TensorRT LLM's behavior and are set within th
 
 #### `max_batch_size`
 
-* **Description:** The maximum number of user requests that can be grouped into a single batch for processing. The actual max batch size that can be achieved depends on total sequence length (input + output) and GPU memory available for KV cache.
+* **Description:** The maximum number of user requests that can be grouped into a single batch for processing. The actual max batch size that can be achieved depends on total sequence length (input + output).
 
 #### `max_num_tokens`
 
-* **Description:** The maximum total number of tokens (across all requests) allowed inside a single scheduled batch. All input tokens (prefill phase) per request and 1 output token per decode request count towards this threshold.
+* **Description:** The maximum total number of tokens (across all requests) allowed inside a single scheduled batch.
 
 #### `max_seq_len`
 
@@ -179,7 +178,7 @@ These options provide control over TensorRT LLM's behavior and are set within th
   * `backend`: The backend to use for MoE operations.
     **Default**: `CUTLASS`
 
-See the [`TorchLlmArgs` class](https://nvidia.github.io/TensorRT-LLM/llm-api/reference.html#tensorrt_llm.llmapi.TorchLlmArgs) for the full list of options which can be used in the YAML configuration file.
+See the [`TorchLlmArgs` class](https://nvidia.github.io/TensorRT-LLM/llm-api/reference.html#tensorrt_llm.llmapi.TorchLlmArgs) for the full list of options which can be used in the `extra_llm_api_options`.
 
 ## Testing API Endpoint
 
@@ -369,36 +368,25 @@ $$
   * The combined rate at which the system processes both input (prompt) tokens and output (generated) tokens.
 
 $$
-\text{Total TPS} = \frac{\text{Total input tokens}+\text{Total generated tokens}}{T_{last} - T_{first}}
+\text{Total TPS} = \frac{\text{Num Input Tokens}+\text{Num Output Tokens}}{T_{last} - T_{first}}
 $$
 
 #### Tokens Per Second (TPS) or Output Token Throughput
   * how many output tokens the system generates each second.
 
 $$
-\text{TPS} = \frac{\text{Total generated tokens}}{T_{last} - T_{first}}
+\text{TPS} = \frac{\text{Num Output Tokens}}{T_{last} - T_{first}}
 $$
 
 ## Preconfigured Recipes
 
-The following sections help you pick a known-good `trtllm-serve --config` for your target GPU and traffic pattern.
-
-### Recipe selector
+The following table lists recommended configurations from the comprehensive database for different performance profiles.
 
 ```{eval-rst}
-.. trtllm_config_selector::
-   :models: openai/gpt-oss-120b
-```
-
-```{eval-rst}
-.. include:: ../_includes/note_sections.rst
+.. include:: note_sections.rst
    :start-after: .. start-note-traffic-patterns
    :end-before: .. end-note-traffic-patterns
-```
 
-### Recipe database
-
-```{eval-rst}
 .. include:: config_table.rst
    :start-after: .. start-openai/gpt-oss-120b
    :end-before: .. end-openai/gpt-oss-120b

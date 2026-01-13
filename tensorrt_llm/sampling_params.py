@@ -392,20 +392,26 @@ class SamplingParams:
             strs = [self.stop] if isinstance(self.stop, str) else self.stop
             self._stop_word_ids = [_encode(tokenizer, s, add_special_tokens) for s in strs]
 
-        # Add eos_token_id in generation_config to stop_token_ids
+        # Add eos_token_id in generation_config to _stop_word_ids
+        # Refer to https://huggingface.co/docs/hub/en/transformers#transformers-repository-files and
+        # https://github.com/huggingface/transformers/blob/1ae4d917ed3badbdb1ffc167e0529f5a6d3c080d/src/transformers/generation/stopping_criteria.py#L451C1-L451C42
         # The eos_token_id in generation_config are really mean to stop the text generation.
         if generation_config is not None and generation_config.eos_token_id is not None:
             if isinstance(generation_config.eos_token_id, int):
-                generation_config.eos_token_id = [generation_config.eos_token_id]
-            # else is always List[int]
+                generation_eos_token_ids = [generation_config.eos_token_id]
+            else:  # always List[int]
+                generation_eos_token_ids = generation_config.eos_token_id
 
-            if not self.stop_token_ids:
-                self.stop_token_ids = []
-            for stop_token in generation_config.eos_token_id:
-                if stop_token != self.end_id and stop_token not in self.stop_token_ids:
-                    self.stop_token_ids.append(stop_token)
-            if not self.stop_token_ids:
-                self.stop_token_ids = None
+            if self._stop_word_ids is None:
+                self._stop_word_ids = [generation_eos_token_ids]
+            else:
+                all_stop_tokens_id = set(i for sublist in self._stop_word_ids for i in sublist)
+                from_generation_stop_token_ids = [
+                    i for i in generation_eos_token_ids if i not in all_stop_tokens_id
+                ]
+
+                if from_generation_stop_token_ids:
+                    self._stop_word_ids.append(from_generation_stop_token_ids)
 
         return self
 

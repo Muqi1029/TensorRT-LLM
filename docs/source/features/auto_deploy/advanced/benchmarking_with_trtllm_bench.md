@@ -24,13 +24,7 @@ As in the PyTorch workflow, AutoDeploy does not require a separate `trtllm-bench
 
 ## Advanced Configuration
 
-For more granular control over AutoDeploy's behavior during benchmarking, use the `--config` flag with a YAML configuration file:
-
-```{eval-rst}
-.. include:: ../../../_includes/note_sections.rst
-   :start-after: .. start-note-config-flag-alias
-   :end-before: .. end-note-config-flag-alias
-```
+For more granular control over AutoDeploy's behavior during benchmarking, use the `--extra_llm_api_options` flag with a YAML configuration file:
 
 ```bash
 trtllm-bench \
@@ -38,7 +32,7 @@ trtllm-bench \
   throughput \
   --dataset /tmp/synthetic_128_128.txt \
   --backend _autodeploy \
-  --config autodeploy_config.yaml
+  --extra_llm_api_options autodeploy_config.yaml
 ```
 
 ### Configuration Examples

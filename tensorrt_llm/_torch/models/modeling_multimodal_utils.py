@@ -17,8 +17,7 @@
 # and s2wrapper: https://github.com/bfshi/scaling_on_scales
 
 import math
-import os
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import torch
 import torch.nn.functional as F
@@ -29,13 +28,6 @@ from torchvision.transforms import Normalize, Resize, ToTensor
 from tensorrt_llm._torch.modules.embedding import Embedding
 from tensorrt_llm.inputs.multimodal import MultimodalParams
 from tensorrt_llm.logger import logger
-
-_MULTIMODAL_ENV_NAME = "TLLM_MULTIMODAL_DISAGGREGATED"
-
-
-# Make this a runtime lookup rather than a module-wide constant for easier unit testing.
-def _is_disagg() -> bool:
-    return os.getenv(_MULTIMODAL_ENV_NAME, "0") == "1"
 
 
 def _get_uncached_multimodal_params(
@@ -75,17 +67,17 @@ def _cache_multimodal_embeddings(
     mostly for chunked prefill. It does not persist embeddings across different requests or sessions.
     """
     # TODO: support multiple multimodal modalities per request
-    if len(embeddings) > 1:
-        raise ValueError("Multiple modalities caching is not supported yet.")
+    assert len(
+        embeddings
+    ) == 1, "Currently only support single mm_embeds (single modality) per request"
     mm_embed = embeddings[0]
 
     # Collect embedding lengths for each parameter
-    embed_lengths = []
-    for param in multimodal_params:
-        if param.multimodal_runtime is not None:
-            embed_lengths.append(
-                param.multimodal_runtime.total_mm_tokens_in_request -
-                param.multimodal_runtime.total_special_tokens_in_request)
+    embed_lengths = [
+        param.multimodal_runtime.total_mm_tokens_in_request -
+        param.multimodal_runtime.total_special_tokens_in_request
+        for param in multimodal_params if param.multimodal_runtime is not None
+    ]
 
     # Validate total length matches
     total_expected = sum(embed_lengths)
@@ -111,10 +103,7 @@ def _cache_multimodal_embeddings(
 
 
 def get_multimodal_embeddings(
-    encoder_forward_fn: Callable[
-        [List[MultimodalParams]],
-        Union[torch.Tensor, Tuple[torch.Tensor, Dict[str, Any]]],
-    ],
+    encoder_forward_fn,
     multimodal_params: List[MultimodalParams],
     encoder_kwargs: Optional[Dict[str, Any]] = None,
 ) -> List[torch.Tensor]:
@@ -128,13 +117,12 @@ def get_multimodal_embeddings(
     4. Gather all embeddings for the batch
 
     Args:
-        encoder_forward_fn: Callable that performs encoder forward pass.
-                           Should accept List[MultimodalParams] and return List[torch.Tensor] or
-                           Tuple[List[torch.Tensor], Dict[str, Any]] for models with auxiliary outputs.
-        multimodal_params: All multimodal parameters in the batch.
-        encoder_kwargs: Optional kwargs to pass to encoder_forward_fn.
+        encoder_forward_fn: Callable that performs encoder forward pass
+                           Should accept List[MultimodalParams] and return List[torch.Tensor]
+        multimodal_params: All multimodal parameters in the batch
+
     Returns:
-        List of multimodal embeddings for all multimodal params in the batch.
+        List of multimodal embeddings for all multimodal params in the batch
     """
     if not multimodal_params:
         return []
@@ -146,13 +134,12 @@ def get_multimodal_embeddings(
     # Step 2: Run encoder forward only on uncached parameters
     if uncached_multimodal_params:
         kwargs = encoder_kwargs or {}
-        encoder_embeddings = encoder_forward_fn(uncached_multimodal_params,
-                                                **kwargs)
+        encoder_outputs = encoder_forward_fn(uncached_multimodal_params,
+                                             **kwargs)
 
         # TODO: support multiple multimodal modalities per request
-        if len(encoder_embeddings) > 1:
-            logger.warning("Multiple modalities caching is not supported yet.")
-            return encoder_embeddings
+        if len(encoder_outputs) > 1:
+            return encoder_outputs
 
         # Validate that multimodal_runtime has required attributes for caching
         if (not hasattr(uncached_multimodal_params[0], 'multimodal_runtime')
@@ -160,13 +147,13 @@ def get_multimodal_embeddings(
                 or uncached_multimodal_params[0].multimodal_runtime.
                 total_mm_tokens_in_request is None):
             logger.warning(
-                "Multimodal runtime data missing or incomplete, will not cache embeddings."
+                "Multimodal runtime data missing or incomplete - recomputed all embeddings"
             )
-            return encoder_embeddings
+            return encoder_outputs
 
         # Step 3: Cache the computed embeddings to multimodal_data["multimodal_embedding"]
         _cache_multimodal_embeddings(uncached_multimodal_params,
-                                     encoder_embeddings)
+                                     encoder_outputs)
 
     # Step 4: Gather all embeddings for the batch
     for param in multimodal_params:
@@ -314,12 +301,8 @@ def fuse_input_embeds(
     mm_token_ids: Optional[torch.IntTensor] = None,
     text_token_indices: Optional[torch.IntTensor] = None,
     mm_token_indices: Optional[torch.IntTensor] = None,
-    extra_embeds: Optional[List[torch.Tensor]] = None,
     **kwargs,
-    # TODO: make unified return type for all models
-) -> Union[Tuple[Optional[torch.IntTensor], Optional[torch.FloatTensor]],
-           Tuple[Optional[torch.IntTensor], Optional[torch.FloatTensor],
-                 Optional[List[torch.FloatTensor]]]]:
+) -> Tuple[Optional[torch.IntTensor], Optional[torch.FloatTensor]]:
     """
     Fuse text and multimodal embeddings. input_ids is [text_total_length + mm_total_length] and mm_embed is [mm_total_length, hidden_dim]. We just need to fuse them into [text_total_length + mm_total_length, hidden_dim] by slice-and-assign to the corresponding entries.
 
@@ -328,7 +311,6 @@ def fuse_input_embeds(
         input_ids: shape [text_total_length + mm_total_length], flattened from List[(text_length1 + mm_total_length1), ..., (text_lengthi + mm_total_lengthi)]. For LLM model, the requests are inflight batched together, but the input_ids are flattened with padding removed. By the slice condition < vocab_size, we can easily separate text / multimodal tokens and naturally batched the LLM embedding lookup
         mm_embeds: List[(mm_total_length1, hidden_dim), ..., (mm_total_lengthi, hidden_dim)].
         mm_token_ids: possible token ids for multimodal tokens, if known. If not known and set to None, it is assumed that the multimodal tokens are out-of-vocabulary tokens.
-        extra_embeds: Optional list of extra embed tensors for models that support it (e.g., Qwen3-VL/Qwen3-MoE-VL).
     Returns:
         - If (1) JIT test run, (2) non-multimodal run, i.e. all text-only requests, either context or generation phase (3) multimodal run, all requests in generation phase --> there is no multimodal data, return only the input_ids
         - If (4) multimodal run, mixed batch of context and generation requests, each context request has a multimodal feature --> return only the fused input_embeds of shape [total length, hidden_dim]. For text tokens, LLM embedding layer has already run.
@@ -337,8 +319,6 @@ def fuse_input_embeds(
         - This function may involve host-device synchronization if indices are not provided and filtering is performed. See filter_mm_token_from_input_ids for details.
     """
     if len(mm_embeds) == 0:
-        if extra_embeds is not None and len(extra_embeds) > 0:
-            return input_ids, None, extra_embeds
         return input_ids, None
 
     mm_embed = torch.cat(mm_embeds, dim=0)
@@ -350,6 +330,7 @@ def fuse_input_embeds(
             input_ids,
             vocab_size=embedding_layer.num_embeddings,
             mm_token_ids=mm_token_ids)
+
     if mm_token_indices.shape[0] != mm_embed.shape[0]:
         raise ValueError(
             f"Multimodal token count mismatch: found {len(mm_token_indices)} image tokens in input_ids "
@@ -362,23 +343,11 @@ def fuse_input_embeds(
                                mm_embed.shape[-1],
                                device=text_embed.device,
                                dtype=text_embed.dtype)
-    if extra_embeds is not None and len(extra_embeds) > 0:
-        # only support single modality for deepstack features for now
-        for i, extra_feature in enumerate(extra_embeds):
-            extra_embed = torch.zeros(
-                input_ids.shape[0],
-                mm_embed.shape[-1],
-                device=extra_feature.device,
-                dtype=extra_feature.dtype,
-            )
-            extra_embed[mm_token_indices, :] = extra_feature
-            extra_embeds[i] = extra_embed
 
     input_embeds[text_token_indices, :] = text_embed
     input_embeds[mm_token_indices, :] = mm_embed.to(dtype=input_embeds.dtype,
                                                     device=input_embeds.device)
-    if extra_embeds is not None and len(extra_embeds) > 0:
-        return None, cast(torch.FloatTensor, input_embeds), extra_embeds
+
     return None, cast(torch.FloatTensor, input_embeds)
 
 

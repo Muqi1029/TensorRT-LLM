@@ -15,7 +15,6 @@ import pygit2
 from docutils import nodes
 
 sys.path.insert(0, os.path.abspath('.'))
-sys.path.insert(0, os.path.abspath('_ext'))
 
 project = 'TensorRT LLM'
 copyright = '2025, NVidia'
@@ -44,13 +43,6 @@ version = version_module.__version__
 templates_path = ['_templates']
 exclude_patterns = ['performance/performance-tuning-guide/introduction.md']
 
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-CPP_XML_INDEX = os.path.abspath(
-    os.path.join(SCRIPT_DIR, "..", "cpp_docs", "xml", "index.xml"))
-HAS_CPP_XML = os.path.exists(CPP_XML_INDEX)
-if not HAS_CPP_XML:
-    exclude_patterns.append('_cpp_gen/**')
-
 extensions = [
     'sphinx.ext.duration',
     'sphinx.ext.autodoc',
@@ -59,6 +51,7 @@ extensions = [
     'sphinx.ext.napoleon',
     'sphinx.ext.mathjax',
     'myst_parser',  # for markdown support
+    "breathe",
     'sphinx.ext.todo',
     'sphinx.ext.autosectionlabel',
     'sphinxarg.ext',
@@ -66,11 +59,7 @@ extensions = [
     'sphinx_copybutton',
     'sphinxcontrib.autodoc_pydantic',
     'sphinx_togglebutton',
-    'trtllm_config_selector',
 ]
-
-if HAS_CPP_XML:
-    extensions.append("breathe")
 
 autodoc_member_order = 'bysource'
 autodoc_pydantic_model_show_json = True
@@ -151,11 +140,12 @@ html_theme_options = {
     ]
 }
 
-if HAS_CPP_XML:
-    breathe_default_project = "TensorRT-LLM"
-    breathe_projects = {"TensorRT-LLM": "../cpp_docs/xml"}
-else:
-    breathe_projects = {}
+# ------------------------  C++ Doc related  --------------------------
+# Breathe configuration
+breathe_default_project = "TensorRT-LLM"
+breathe_projects = {"TensorRT-LLM": "../cpp_docs/xml"}
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 
 CPP_INCLUDE_DIR = os.path.join(SCRIPT_DIR, '../../cpp/include/tensorrt_llm')
 CPP_GEN_DIR = os.path.join(SCRIPT_DIR, '_cpp_gen')
@@ -216,11 +206,10 @@ Runtime
 .. It is also doable to automatically generate this file and list all the modules in the conf.py
     """.strip()
 
-if HAS_CPP_XML:
-    # compile cpp doc
-    subprocess.run(['mkdir', '-p', CPP_GEN_DIR])
-    gen_cpp_doc(CPP_GEN_DIR + '/runtime.rst', CPP_INCLUDE_DIR + '/runtime',
-                runtime_summary)
+# compile cpp doc
+subprocess.run(['mkdir', '-p', CPP_GEN_DIR])
+gen_cpp_doc(CPP_GEN_DIR + '/runtime.rst', CPP_INCLUDE_DIR + '/runtime',
+            runtime_summary)
 
 executor_summary = f"""
 Executor
@@ -231,7 +220,6 @@ Executor
 .. It is also doable to automatically generate this file and list all the modules in the conf.py
     """.strip()
 
-if HAS_CPP_XML:
-    subprocess.run(['mkdir', '-p', CPP_GEN_DIR])
-    gen_cpp_doc(CPP_GEN_DIR + '/executor.rst', CPP_INCLUDE_DIR + '/executor',
-                executor_summary)
+subprocess.run(['mkdir', '-p', CPP_GEN_DIR])
+gen_cpp_doc(CPP_GEN_DIR + '/executor.rst', CPP_INCLUDE_DIR + '/executor',
+            executor_summary)

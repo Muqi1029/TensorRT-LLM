@@ -66,7 +66,6 @@ extern "C"
 
         bool is_spec_dec_tree
             = true; // useful only when multi_query_tokens, should be true unless using linear tree in spec-dec.
-        bool use_skip_softmax_attn;
     } tllmXqaJitContext;
 
     // tllmXqaJitProgram is an opaque handle for a program.

@@ -104,14 +104,12 @@ public:
 
     [[nodiscard]] SizeType32 constexpr getTensorParallelRank() const noexcept
     {
-        // Layout: pp is outermost, then tp, then cp is innermost (consecutive).
-        return (mRank % (mTensorParallelism * mContextParallelism)) / mContextParallelism;
+        return mRank % mTensorParallelism;
     }
 
     [[nodiscard]] SizeType32 constexpr getContextParallelRank() const noexcept
     {
-        // Layout: pp is outermost, then tp, then cp is innermost (consecutive).
-        return mRank % mContextParallelism;
+        return (mRank % (mTensorParallelism * mContextParallelism)) / mTensorParallelism;
     }
 
     [[nodiscard]] SizeType32 constexpr getLocalRank() const noexcept

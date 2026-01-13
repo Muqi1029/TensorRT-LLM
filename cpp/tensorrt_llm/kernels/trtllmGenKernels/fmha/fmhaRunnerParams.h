@@ -283,8 +283,6 @@ struct TllmGenFmhaRunnerParams
     // The start token index in SF tensor. Used for FP4 SF offset calculation in generation phase kernel when inflight
     // batching is enabled.
     int mSfStartTokenIdx;
-    // Skip softmax threshold scale factor.
-    float mSkipSoftmaxThresholdScaleFactor;
     // Whether to use sparse MLA.
     bool mSparseMla;
     // The top k value for sparse MLA.
@@ -348,8 +346,6 @@ struct TllmGenSelectKernelParams
     int mTileSizeKv;
     // Use 2 CTA MMA or not.
     bool mUses2CtaMma;
-    // Skips softmax or not.
-    bool mSkipsSoftmaxWhenPossible;
 
     // The constructor.
     TllmGenSelectKernelParams(TllmGenFmhaRunnerParams params)
@@ -363,8 +359,7 @@ struct TllmGenSelectKernelParams
         , mSelectNewKernel(false)
         , mTileScheduler(params.mTileScheduler)
         , mTileSizeKv(128)
-        , mUses2CtaMma(false)
-        , mSkipsSoftmaxWhenPossible(false){};
+        , mUses2CtaMma(false){};
 };
 
 } // namespace kernels

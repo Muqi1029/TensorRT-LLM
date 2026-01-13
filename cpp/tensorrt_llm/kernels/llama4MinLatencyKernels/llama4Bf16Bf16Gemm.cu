@@ -60,7 +60,7 @@ __global__ void llama4_bf16_bf16_gemm_kernel(int num_tokens,
         b_vec[chunk] = reinterpret_cast<aligned_bf16x4 const*>(B)[row * GEMM_K / VEC_SIZE + base_idx];
     }
 
-    cudaGridDependencySynchronize();
+    asm volatile("griddepcontrol.wait;" ::: "memory");
 
     // Process 5 chunks of 4 elements each
 #pragma unroll

@@ -1,4 +1,3 @@
-import json
 import random
 import time
 from contextlib import contextmanager, nullcontext
@@ -48,7 +47,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 @force_ampere
 @pytest.mark.parametrize("enable_chunked_prefill,", [False, True])
-@pytest.mark.part2
 def test_tinyllama_logits_processor(enable_chunked_prefill):
     tinyllama_logits_processor_test_harness(
         backend="pytorch", enable_chunked_prefill=enable_chunked_prefill)
@@ -63,7 +61,6 @@ def test_tinyllama_logits_processor(enable_chunked_prefill):
         (False, True, False, True),
         (False, True, True, True),
     ])
-@pytest.mark.part0
 def test_llm_get_stats(return_context_logits, use_overlap,
                        enable_chunked_prefill, enable_iter_req_stats):
     llm_get_stats_test_harness(tp_size=1,
@@ -84,7 +81,6 @@ def test_llm_get_stats(return_context_logits, use_overlap,
         (False, True, False, True),
         (False, True, True, True),
     ])
-@pytest.mark.part1
 def test_llm_get_stats_async(return_context_logits, use_overlap,
                              enable_chunked_prefill, enable_iter_req_stats):
     llm_get_stats_async_test_harness(
@@ -97,7 +93,6 @@ def test_llm_get_stats_async(return_context_logits, use_overlap,
         enable_iter_req_stats=enable_iter_req_stats)
 
 
-@pytest.mark.part1
 def test_llm_capture_request_error():
     _test_llm_capture_request_error(pytorch_backend=True, tp_size=1)
 
@@ -109,7 +104,6 @@ def test_llm_capture_request_error():
     [
         SamplingParams()  # pytorch only supports n=1
     ])
-@pytest.mark.part0
 def test_llm_abort_request(sampling_params):
     llm = LLM(model=llama_model_path, kv_cache_config=global_kvcache_config)
     run_llm_abort_request(llm=llm, sampling_params=sampling_params)
@@ -123,7 +117,6 @@ def _validate_invalid_token_error_scope():
 
 
 @force_ampere
-@pytest.mark.part1
 def test_llm_invalid_input_token():
     llm = LLM(model=llama_model_path, kv_cache_config=global_kvcache_config)
     prompts = [
@@ -142,7 +135,6 @@ def test_llm_invalid_input_token():
 
 
 @force_ampere
-@pytest.mark.part0
 def test_llm_invalid_input_token_async():
     llm = LLM(model=llama_model_path, kv_cache_config=global_kvcache_config)
     # NB: exc_info in _validate_invalid_token_error_scope creates a reference
@@ -174,7 +166,6 @@ def test_llm_invalid_input_token_async():
                         futures[collect_idx].result()
 
 
-@pytest.mark.part2
 def test_llm_reward_model():
     rm_model_path = get_model_path("Qwen2.5-Math-PRM-7B")
     tokenizer = TransformersTokenizer.from_pretrained(rm_model_path)
@@ -196,7 +187,6 @@ def test_llm_reward_model():
 
 
 @skip_ray
-@pytest.mark.part3
 def test_llm_perf_metrics():
     with LLM(model=llama_model_path,
              kv_cache_config=global_kvcache_config) as llm:
@@ -225,7 +215,6 @@ def test_llm_perf_metrics():
 
 
 @skip_ray
-@pytest.mark.part3
 def test_llm_prometheus():
     test_prompts = [
         "Hello, my name is",
@@ -249,7 +238,6 @@ def test_llm_prometheus():
 
 @skip_ray
 @pytest.mark.parametrize("streaming", [True, False])
-@pytest.mark.part3
 def test_llm_with_postprocess_parallel_and_result_handler(streaming):
     run_llm_with_postprocess_parallel_and_result_handler(streaming,
                                                          "pytorch",
@@ -317,7 +305,6 @@ def llama_7b_lora_from_dir_test_harness(**llm_kwargs) -> None:
 
 
 @skip_gpu_memory_less_than_40gb
-@pytest.mark.part0
 def test_llama_7b_lora():
     llama_7b_lora_from_dir_test_harness()
 
@@ -380,7 +367,6 @@ def _check_llama_7b_multi_lora_evict_load_new_adapters(
 
 @skip_gpu_memory_less_than_40gb
 @skip_ray  # https://nvbugs/5682551
-@pytest.mark.part3
 def test_llama_7b_multi_lora_evict_and_reload_lora_gpu_cache():
     """Test eviction and re-loading a previously evicted adapter from the LoRA GPU cache, within a single
     llm.generate call, that's repeated twice.
@@ -394,7 +380,6 @@ def test_llama_7b_multi_lora_evict_and_reload_lora_gpu_cache():
 
 
 @skip_gpu_memory_less_than_40gb
-@pytest.mark.part1
 def test_llama_7b_multi_lora_evict_and_load_new_adapters_in_cpu_and_gpu_cache():
     """Test eviction and loading of new adapters in the evicted space, over several llm.generate calls, with LoRA GPU
     cache size < LoRA CPU cache size.
@@ -408,7 +393,6 @@ def test_llama_7b_multi_lora_evict_and_load_new_adapters_in_cpu_and_gpu_cache():
 
 
 @skip_gpu_memory_less_than_40gb
-@pytest.mark.part0
 def test_llama_7b_multi_lora_read_from_cache_after_insert():
     """Test that loading and then using the same adapters loaded in cache works."""
     _check_llama_7b_multi_lora_evict_load_new_adapters(
@@ -420,7 +404,6 @@ def test_llama_7b_multi_lora_read_from_cache_after_insert():
 
 
 @skip_gpu_memory_less_than_40gb
-@pytest.mark.part3
 def test_llama_7b_multi_lora_evict_and_reload_evicted_adapters_in_cpu_and_gpu_cache(
 ):
     """Test eviction, reloading new adapters and reloading previously evicted adapters from the LoRA CPU cache & GPU
@@ -443,7 +426,6 @@ def test_llama_7b_multi_lora_evict_and_reload_evicted_adapters_in_cpu_and_gpu_ca
 
 
 @skip_gpu_memory_less_than_40gb
-@pytest.mark.part2
 def test_llama_7b_peft_cache_config_affects_peft_cache_size():
     """Tests that LLM arg of peft_cache_config affects the peft cache sizes.
 
@@ -481,7 +463,6 @@ def test_llama_7b_peft_cache_config_affects_peft_cache_size():
 
 @skip_ray  # https://nvbugs/5682551
 @skip_gpu_memory_less_than_40gb
-@pytest.mark.part1
 def test_llama_7b_lora_config_overrides_peft_cache_config():
     """Tests that cache size args in lora_config LLM arg override the cache size
     parameters in peft_cache_config LLM arg.
@@ -505,7 +486,6 @@ def test_llama_7b_lora_config_overrides_peft_cache_config():
 # https://jirasw.nvidia.com/browse/TRTLLM-5045
 @pytest.mark.skip(reason="https://nvbugs/5448464")
 @skip_gpu_memory_less_than_138gb
-@pytest.mark.part1
 def test_nemotron_nas_lora() -> None:
     lora_config = LoraConfig(lora_dir=[
         f"{llm_models_root()}/nemotron-nas/Llama-3_3-Nemotron-Super-49B-v1-lora-adapter_r64"
@@ -538,7 +518,6 @@ def test_nemotron_nas_lora() -> None:
 
 
 @skip_gpu_memory_less_than_80gb
-@pytest.mark.part0
 def test_llama_3_1_8b_fp8_with_bf16_lora() -> None:
     skip_fp8_pre_ada(use_fp8=True)
     model_dir = f"{llm_models_root()}/llama-3.1-model/Llama-3.1-8B-Instruct-FP8"
@@ -569,7 +548,6 @@ def test_llama_3_1_8b_fp8_with_bf16_lora() -> None:
 
 
 @skip_gpu_memory_less_than_80gb
-@pytest.mark.part2
 def test_bielik_11b_v2_2_instruct_multi_lora() -> None:
     model_dir = f"{llm_models_root()}/Bielik-11B-v2.2-Instruct"
 
@@ -623,7 +601,6 @@ def test_bielik_11b_v2_2_instruct_multi_lora() -> None:
         assert len(outputs) == 2
 
 
-@pytest.mark.part2
 def test_gemma3_1b_instruct_multi_lora() -> None:
     model_dir = f"{llm_models_root()}/gemma/gemma-3-1b-it"
 
@@ -688,7 +665,6 @@ def test_gemma3_1b_instruct_multi_lora() -> None:
         (16, 16, "rank_16"),
         (4, 8, "rank_4_max_8"),
     ])
-@pytest.mark.part3
 def test_load_torch_nemo_lora_function(tmp_path, lora_rank, max_lora_rank,
                                        description):
     """Test load_torch_nemo_lora function with different LoRA rank configurations."""
@@ -718,7 +694,6 @@ def test_load_torch_nemo_lora_function(tmp_path, lora_rank, max_lora_rank,
     }, f"Expected correct module mapping for {description}"
 
 
-@pytest.mark.part0
 def test_nemo_lora_unsupported_modules_validation(tmp_path):
     """Test validation of unsupported modules in NeMo LoRA."""
     from tensorrt_llm.lora_manager import load_torch_nemo_lora
@@ -744,7 +719,6 @@ def test_nemo_lora_unsupported_modules_validation(tmp_path):
 
 
 @force_ampere
-@pytest.mark.part1
 def test_gqa_nemo_lora(tmp_path):
     """
     Test NeMo-format LoRA checkpoint loading and GQA support in TinyLlama.
@@ -823,7 +797,6 @@ def test_gqa_nemo_lora(tmp_path):
 
 class TestLlmError:
 
-    @pytest.mark.part3
     def test_max_num_token_check(self):
         """ LLM should raise error when got prompt length exceed the valid range. """
         llm = LLM(llama_model_path,
@@ -854,7 +827,6 @@ FailingExecutor = type(
 
 
 @skip_ray
-@pytest.mark.part2
 def test_llm_with_proxy_error():
     """Test that LLM properly handles GenerationExecutorWorker constructor failures.
 
@@ -955,7 +927,6 @@ def test_llm_return_logprobs_streaming(prompt_logprobs, logprobs,
 
 class TestLlmError:
 
-    @pytest.mark.part3
     def test_max_num_token_check(self):
         """ LLM should raise error when got prompt length exceed the valid range. """
         llm = LLM(llama_model_path,
@@ -1003,62 +974,6 @@ async def test_llm_rpc_streaming():
             outputs.append(output.outputs[0].text)
         "".join(outputs)
         print(f"get result: {outputs}")
-
-
-@skip_ray
-def test_llm_rpc_get_stats():
-    """Test that get_stats works with RPC orchestrator."""
-
-    with LLM(model=llama_model_path,
-             kv_cache_config=global_kvcache_config,
-             enable_iter_perf_stats=True,
-             orchestrator_type="rpc") as llm:
-        assert isinstance(llm._executor, GenerationExecutorRpcProxy)
-
-        # Generate some output to produce stats
-        for output in llm.generate(
-                prompts, sampling_params=SamplingParams(max_tokens=5)):
-            print(output)
-
-        stats = llm.get_stats(timeout=5)
-
-        assert len(stats) > 0, "Should have at least one stats entry"
-        # Stats should be JSON strings that can be parsed
-        parsed = json.loads(stats[0]) if isinstance(stats[0], str) else stats[0]
-        assert "iter" in parsed, "Stats should contain 'iter' field"
-        assert "cpuMemUsage" in parsed, "Stats should contain 'cpuMemUsage' field"
-
-
-@skip_ray
-@pytest.mark.asyncio
-async def test_llm_rpc_get_stats_async():
-    """Test that get_stats_async works with RPC orchestrator."""
-    import json
-
-    with LLM(model=llama_model_path,
-             kv_cache_config=global_kvcache_config,
-             enable_iter_perf_stats=True,
-             orchestrator_type="rpc") as llm:
-        assert isinstance(llm._executor, GenerationExecutorRpcProxy)
-
-        # Generate some output to produce stats
-        async for output in llm.generate_async(
-            prompts[0], sampling_params=SamplingParams(max_tokens=5)):
-            print(output)
-
-        # Get stats via async API
-        stats_result = llm.get_stats_async(timeout=2)
-
-        # Should be able to iterate over results
-        stats_count = 0
-        async for stat in stats_result:
-            parsed = json.loads(stat) if isinstance(stat, str) else stat
-            assert "iter" in parsed, "Stats should contain 'iter' field"
-            stats_count += 1
-            if stats_count >= 1:
-                break  # Just verify we can get at least one
-
-        assert stats_count > 0, "Should have received at least one stat"
 
 
 @pytest.mark.threadleak(enabled=False)

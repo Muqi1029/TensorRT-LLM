@@ -414,7 +414,7 @@ trtllm-serve ${MODEL_NAME}/ \
     --tp_size 1 \
     --port 8000 \
     --max_batch_size 4 \
-    --config extra-llm-api-options.yaml
+    --extra_llm_api_options extra-llm-api-options.yaml
 ```
 
 ### Supported Model Variants
