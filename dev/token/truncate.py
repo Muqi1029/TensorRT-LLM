@@ -1,5 +1,6 @@
 import json
 import os
+from argparse import ArgumentParser
 from enum import Enum
 from typing import List
 
@@ -54,12 +55,12 @@ def test_token(token: str):
     print(f"Processing {token=}: {judge_token(token)}")
 
 
-def find_key(target_id: int):
-    for key, token_id in vocab.items():
+def find_token_by_id(target_id: int):
+    for token, token_id in vocab.items():
         if token_id == target_id:
-            found_key = key
+            found_token = token
             break
-    print(f"{found_key=}")
+    print(f"{found_token=}")
 
 
 def convert_back(token_ids: List[int], tokenizer) -> str:
@@ -70,28 +71,43 @@ def convert_back(token_ids: List[int], tokenizer) -> str:
     print(f"{text=}")
 
 
-def show_semantic_ids(vocab):
-    start_id = 151646
+def get_semantic_ids(vocab, output_path) -> List[int]:
+    """Only get semantic ids, return new2old_arr."""
+    start_id = 151646  # FIXME(Muqi1029): hardcode here, will replace it with more useful methods
     ids = []
     for token, token_id in vocab.items():
         if token_id >= start_id:
             ids.append(token_id)
     ids.sort()
-    with open("new2old.json", "w", encoding="utf-8") as f:
+    filepath = os.path.join(output_path, "new2old_arr.json")
+    with open(filepath, "w", encoding="utf-8") as f:
         json.dump(ids, f, indent=2, ensure_ascii=False)
+    print(f"save to {filepath}")
 
 
 if __name__ == "__main__":
-    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    parser = ArgumentParser()
+    parser.add_argument(
+        "--mode",
+        type=str,
+        required=True,
+        choices=["semantic_ids", "find_token"],
+    )
+    parser.add_argument("--output_path", default=".")
+    args = parser.parse_args()
 
-    # get_vocab() returns a dictionary of {token: id}
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+    # get_vocab() returns a dictionary of {token: token_id}
     vocab = tokenizer.get_vocab()
 
     pretty_print(f"Original Vocab Size: {len(vocab)}")
+    if args.mode == "semantic_ids":
+        get_semantic_ids(vocab, args.output_path)
+    elif args.model == "find_token":
+        pass
     # test_token(" ")
 
     # truncate(vocab)
-    show_semantic_ids(vocab)
     # find_key(108386)
 
     # token_ids = [28542, 43141, 96773, 15960, 111229, 39238]
