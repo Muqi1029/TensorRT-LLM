@@ -359,7 +359,7 @@ __global__ void moeA2APrepareDispatchKernel(
 
 template <typename ThreadingPolicy, int TOP_K>
 __global__ void moeA2ADispatchKernel(int32_t const* token_selected_experts, // [local_num_tokens, TOP_K]
-    const DispatchKernelPointers ptrs,                                      // Struct containing all kernel pointers
+    DispatchKernelPointers const ptrs,                                      // Struct containing all kernel pointers
     int num_payloads,                                                       // Number of payloads
     int max_tokens_per_rank,                                                // Maximum tokens per rank
     int local_num_tokens, int rank_id, int ep_size, int num_experts_per_rank)
@@ -493,12 +493,23 @@ __global__ void moeA2ADispatchKernel(int32_t const* token_selected_experts, // [
 #if !DISABLE_SYNC_FOR_PROFILING
             uint32_t expected_value = *ptrs.flag_val;
 
+#if __CUDA_ARCH__ >= 900
             asm volatile("fence.release.sys;");
+#else
+            asm volatile("membar.sys;"); // 对旧架构使用通用的内存屏障
+#endif
+            // asm volatile("fence.release.sys;");
 #pragma unroll 1 // No unroll as one iter is typically enough
             for (int target_rank = lane_id; target_rank < ep_size; target_rank += warpSize)
             {
                 uint32_t* flag_addr = &ptrs.completion_flags[target_rank][rank_id];
+#if __CUDA_ARCH__ >= 900
                 asm volatile("st.relaxed.sys.u32 [%0], %1;" ::"l"(flag_addr), "r"(expected_value));
+#else
+                // 对于 L40，使用普通的 volatile 存储，配合上面的 membar.sys 达到同步目的
+                *(uint32_t volatile*) flag_addr = expected_value;
+#endif
+                // asm volatile("st.relaxed.sys.u32 [%0], %1;" ::"l"(flag_addr), "r"(expected_value));
 
 #if ENABLE_DEBUG_PRINT
                 printf("dispatch: +++Rank %d setting completion flag to %d for rank %d\n", rank_id, expected_value,
@@ -515,7 +526,12 @@ __global__ void moeA2ADispatchKernel(int32_t const* token_selected_experts, // [
                     uint32_t* flag_ptr = &ptrs.completion_flags[rank_id][peer_rank];
                     uint32_t flag_value;
                     // Acquire load to ensure visibility of peer's release-store
+#if __CUDA_ARCH__ >= 900
                     asm volatile("ld.relaxed.sys.u32 %0, [%1];" : "=r"(flag_value) : "l"(flag_ptr));
+#else
+                    flag_value = *(uint32_t volatile*) flag_ptr;
+#endif
+                    // asm volatile("ld.relaxed.sys.u32 %0, [%1];" : "=r"(flag_value) : "l"(flag_ptr));
 #if ENABLE_DEBUG_PRINT
                     printf(
                         "combine: ---Rank %d received completion flag from rank %d, flag_value: %d, expected_value: "
@@ -985,7 +1001,7 @@ __global__ void moeA2APrepareCombineKernel(uint8_t* recv_buffer_bytes, uint8_t c
 
 template <typename T, typename ThreadingPolicy, int TOP_K>
 __global__ void moeA2ACombineKernel(
-    const CombineKernelPointers ptrs, // Combine-specific struct, src_data_ptrs[0] is output
+    CombineKernelPointers const ptrs, // Combine-specific struct, src_data_ptrs[0] is output
     int max_tokens_per_rank, int elements_per_token, int local_num_tokens, int rank_id, int ep_size)
 {
     int local_token_idx = ThreadingPolicy::token_idx();
@@ -1050,7 +1066,12 @@ __global__ void moeA2ACombineKernel(
                 flag_set = flag_value == expected_value;
             } while (!flag_set);
         }
+#if __CUDA_ARCH__ >= 900
         asm volatile("fence.acquire.sys;");
+#else
+        asm volatile("membar.sys;"); // 对旧架构使用通用的内存屏障
+#endif
+        // asm volatile("fence.acquire.sys;");
     }
     __syncthreads();
 #endif
