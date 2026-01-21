@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+print("--- RUNNING FROM SOURCE ---")
+
 
 def _add_trt_llm_dll_directory():
     import platform

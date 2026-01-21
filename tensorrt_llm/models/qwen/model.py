@@ -34,6 +34,7 @@ from ...quantization import QuantAlgo
 from ..model_weights_loader import ModelWeightsLoader
 from ..modeling_utils import (DecoderLayerList, DecoderModelForCausalLM,
                               QuantConfig)
+from ..monkey_patch_vocab_utils import get_vocab_len
 from .config import QWenConfig
 from .convert import (load_hf_qwen, load_weights_from_hf_gptq_model,
                       load_weights_from_hf_model)
@@ -236,6 +237,7 @@ class QWenForCausalLM(DecoderModelForCausalLM):
 
     def __init__(self, config: QWenConfig):
         transformer = QWenModel(config)
+        config.vocab_size = get_vocab_len()
         vocab_size_padded = pad_vocab_size(config.vocab_size,
                                            config.mapping.tp_size)
 
@@ -256,6 +258,9 @@ class QWenForCausalLM(DecoderModelForCausalLM):
                                        tp_group=config.mapping.tp_group,
                                        tp_size=config.mapping.tp_size,
                                        gather_output=True)
+            logger.info(
+                f"\033[42m LM HEAD Initialization Shape: {lm_head.weight.shape} \033[0m"
+            )
         else:
             lm_head = None
         self.quant_mode = config.quant_mode

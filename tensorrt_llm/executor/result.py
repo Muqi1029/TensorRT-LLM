@@ -729,8 +729,11 @@ class DetokenizedGenerationResultBase(GenerationResultBase):
                         stream_interval=self.sampling_params._stream_interval,
                         **kwargs)
                 else:
-                    beam_output.text = self.tokenizer.decode(
-                        beam_output.token_ids, **kwargs)
+                    beam_output.text = self.tokenizer.decode([
+                        token_id + 155742 for token_id in beam_output.token_ids
+                    ], **kwargs)
+                    # beam_output.text = self.tokenizer.decode(
+                    #     beam_output.token_ids, **kwargs)
 
                 is_generating = not self._done
                 is_finished_with_stop_or_length = (

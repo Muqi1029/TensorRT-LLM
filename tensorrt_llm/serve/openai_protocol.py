@@ -60,7 +60,7 @@ def _logit_bias_to_embedding_bias(logit_bias: Optional[Dict[str, float]],
 
 class OpenAIBaseModel(BaseModel):
     # OpenAI API does not allow extra fields & allow to initialize by both alias and field name
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
 class StreamOptions(OpenAIBaseModel):

@@ -436,6 +436,8 @@ class OpenAIServer:
                     self.perf_metrics.append(item)
 
     async def openai_chat(self, request: ChatCompletionRequest, raw_request: Request) -> Response:
+        if os.getenv("DISABLE_LOG", "").strip().lower() not in ["1", "true"]:
+            logger.info(f"ARSENAL LOG: {request.model_dump_json()}")
 
         def get_role() -> str:
             if request.add_generation_prompt:

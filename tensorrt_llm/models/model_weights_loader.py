@@ -16,6 +16,7 @@ from ..layers.moe import MOEWeightWrapper
 from ..logger import logger
 from ..quantization.layers import (WeightOnlyGroupwiseQuantColumnLinear,
                                    WeightOnlyGroupwiseQuantRowLinear)
+from .monkey_patch_vocab_utils import patch_tensors
 
 
 class ModelWeightsFormat(Enum):
@@ -292,6 +293,17 @@ class ModelWeightsLoader:
             ]
         else:
             v = self.load_tensor(external_key, tp_size, tp_dim, tp_rank)
+
+        # FIXME(muqi1029@gmail.com): Patch loader tensor
+        assert (
+            tp_size == 1
+        ), f"Truncated Vocab Implementation now doesn't support tp_size > 1"
+        if "lm_head" in tllm_key:
+            tensor_shape = v.shape
+            logger.info(f"\033[42m Before {tensor_shape=} \033[0m")
+            v = patch_tensors(v)
+            tensor_shape = v.shape
+            logger.info(f"\033[42m After {tensor_shape=} \033[0m")
 
         if preprocess is not None:
             v = preprocess(v)
