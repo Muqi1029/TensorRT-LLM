@@ -402,6 +402,10 @@ class BaseLLM:
             sampling_params.max_tokens = 1
 
         inputs = prompt_inputs(inputs)
+        if (os.getenv("ENABLE_PROMPT_LOG", "").strip().lower() in {"true", "1"}
+                and "prompt" in inputs):
+            # TODO: add rid
+            logger.info(f"ARSENAL LOG: {repr(inputs['prompt'])}")
 
         if not inputs.get("prompt") and inputs.get("prompt_token_ids") and (
                 inputs.get("multi_modal_data")
