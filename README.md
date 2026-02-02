@@ -1,3 +1,22 @@
+# ARSEANL features
+
+
+- reduce protocol specification
+- truncate vocab
+- stop reason correction
+- log:
+    - ARSENAL LOG: log complete request body. This is enable by default, `export DISABLE_LOG=1` can disable it
+    - PROMPT LOG: log the prompt after applying chat template, used for debugging for wrong usage. `export ENABLE_PROMPT_LOG=1`
+
+## Branch Introduction
+- main: release(production) branch, DO NOT COMMIT TO MAIN BRANCH at most cases!
+- track: track official main branch
+- truncate-vocab: truncate vocab_size
+- model: load dummy model for performance test
+
+More details can be seen at [Doc](https://zhishu.zhipin.com/wiki/AvEvWkNUmCP)
+
+-- --
 <div align="center">
 
 TensorRT LLM
