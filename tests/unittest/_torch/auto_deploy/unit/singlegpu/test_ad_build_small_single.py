@@ -4,7 +4,7 @@ import pytest
 from _model_test_utils import get_small_model_config
 from build_and_run_ad import ExperimentConfig, main
 
-from tensorrt_llm._torch.auto_deploy.llm_args import AutoDeployConfig, LlmArgs, _ParallelConfig
+from tensorrt_llm._torch.auto_deploy.llm_args import LlmArgs, _ParallelConfig
 from tensorrt_llm._torch.auto_deploy.shim.ad_executor import ADEngine
 
 
@@ -12,15 +12,12 @@ def _check_ad_config(experiment_config: ExperimentConfig, llm_args: LlmArgs):
     # Verify that llm_args was captured
     assert llm_args is not None, "llm_args should have been captured"
 
-    # Check that llm_args is an instance of LlmArgs and also an instance of AutoDeployConfig
+    # Check that llm_args is an instance of LlmArgs.
     assert isinstance(llm_args, LlmArgs), f"Expected LlmArgs, got {type(llm_args)}"
-    assert isinstance(llm_args, AutoDeployConfig), (
-        f"Expected AutoDeployConfig, got {type(llm_args)}"
-    )
 
     # check that llm_args and experiment_config have the same args
-    expected_ad_config: AutoDeployConfig = experiment_config.args
-    expected_llm_args: LlmArgs = LlmArgs(**expected_ad_config.to_llm_kwargs())
+    expected_ad_config: LlmArgs = experiment_config.args
+    expected_llm_args: LlmArgs = LlmArgs(**expected_ad_config.model_dump())
     assert expected_llm_args == llm_args, f"Expected llm args {expected_llm_args}, got {llm_args}"
 
     # check expected parallel config
@@ -44,10 +41,14 @@ def _check_ad_config(experiment_config: ExperimentConfig, llm_args: LlmArgs):
         (
             "meta-llama/Meta-Llama-3.1-8B-Instruct",
             {
+                "kv_cache_config": {
+                    "free_gpu_memory_fraction": 0.0001,
+                },
                 "transforms": {
-                    "resize_kv_cache": {"free_mem_ratio": 0.0001},
                     "insert_cached_attention": {"backend": "flashinfer"},
-                    "compile_model": {"backend": "torch-opt"},
+                    # TODO: https://github.com/NVIDIA/TensorRT-LLM/issues/9878
+                    # "compile_model": {"backend": "torch-opt"},
+                    "compile_model": {"backend": "torch-cudagraph"},
                 },
             },
         ),
@@ -183,12 +184,23 @@ def _check_ad_config(experiment_config: ExperimentConfig, llm_args: LlmArgs):
                 "transforms": {
                     "insert_cached_attention": {"backend": "flashinfer"},
                     "compile_model": {"backend": "torch-simple"},
+                    "insert_cached_ssm_attention": {"backend": "triton_ssm"},
+                },
+            },
+        ),
+        (
+            "nvidia/Nemotron-Nano-3-30B-A3.5B-dev-1024",
+            {
+                "transforms": {
+                    "multi_stream_moe": {"stage": "compile", "enabled": True},
+                    "insert_cached_ssm_attention": {"backend": "triton_ssm"},
+                    # TODO: https://github.com/NVIDIA/TensorRT-LLM/issues/9878
+                    "compile_model": {"backend": "torch-cudagraph"},
                 },
             },
         ),
     ],
 )
-@pytest.mark.skip(reason="https://nvbugs/5625972")
 def test_build_ad(model_hub_id: str, llm_extra_args: dict):
     experiment_config = get_small_model_config(model_hub_id, **llm_extra_args)
     experiment_config["args"]["runtime"] = "demollm"  # Default runtime set to demollm

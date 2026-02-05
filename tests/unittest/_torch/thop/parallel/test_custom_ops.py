@@ -59,9 +59,12 @@ def test_register_fake(custom_ops):
     # TODO: add fake impl for these ops in follow-up PRs.
     to_fix = {
         "trtllm::lora_grouped_gemm",
+        "trtllm::lora_grouped_gemm_cuda_graph",
+        "trtllm::lora_group_gemm_param_fill_row_reorder_fusion",
         "trtllm::mtp_relaxed_acceptance_op",
         "trtllm::mtp_update_hidden_states_op",
         "trtllm::mtp_prepare_drafter_inputs_op",
+        "trtllm::extract_real_draft_tokens_op",
         "trtllm::selective_scan",
         "trtllm::reducescatter_list",
         "trtllm::reducescatter_list_pg",
@@ -96,11 +99,6 @@ def test_register_fake(custom_ops):
         "trtllm::e4m3_mxe2m1_block_scale_moe_runner",
         "trtllm::mxe4m3_mxe2m1_block_scale_moe_runner",
         "trtllm::mxfp8_quantize",
-        "trtllm::moe_a2a_dispatch",
-        "trtllm::moe_a2a_combine",
-        "trtllm::moe_a2a_initialize",
-        "trtllm::moe_a2a_get_combine_payload_tensor",
-        "trtllm::moe_a2a_sanitize_expert_ids",
     }
 
     ops_missing_fake_impl = []

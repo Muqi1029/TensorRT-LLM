@@ -1,7 +1,7 @@
 """Custom ops for MHA/XQA attention."""
 
 import math
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 import torch
 import triton
@@ -9,19 +9,17 @@ from torch._ops import OpOverloadPacket
 from torch._subclasses import FakeTensor
 from torch.fx import Node
 
+from ....llmapi.llm_args import KvCacheConfig
 from ..utils.logger import ad_logger
 from ..utils.node_utils import extract_op_args
 from .attention_interface import (
     AttentionDescriptor,
     AttentionLayout,
     AttentionRegistry,
-    BufferInitializerDict,
-    CacheConfig,
-    CacheInitializerDict,
     Constant,
     MHACallable,
-    PrepareMetadataCallable,
-    SequenceInfo,
+    ResourceHandlerDict,
+    UnpagedResourceHandler,
 )
 from .triton_kernels.attention_with_kv_cache import (
     attention_kv_stage2,
@@ -188,11 +186,14 @@ def flattened_mha_with_cache(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
-    # METADATA
+    # STANDARD METADATA
+    batch_info_host: torch.Tensor,
     seq_len: torch.Tensor,
     input_pos: torch.Tensor,
     cache_loc: torch.Tensor,
-    seq_start: torch.Tensor,
+    cu_seqlen: torch.Tensor,
+    # EXTRA METADATA
+    #
     # CACHES
     k_cache: torch.Tensor,
     v_cache: torch.Tensor,
@@ -207,6 +208,15 @@ def flattened_mha_with_cache(
 
     NOTE: this op can also handle seq_len==0, which might be useful for CUDAGRAPH.
     """
+    # check for sequence info and truncate metadata
+    num_prefill, num_prefill_tokens, num_decode = batch_info_host.tolist()
+    num_seq = num_prefill + num_decode
+
+    seq_len = seq_len[:num_seq]
+    input_pos = input_pos[:num_seq]
+    cache_loc = cache_loc[:num_seq]
+    seq_start = cu_seqlen[:num_seq]
+
     # b, s info
     # NOTE: b, s are just the shapes of the input tensor q; not necessarily the number of sequences.
     # Generally speaking, we expect one of two cases here:
@@ -239,7 +249,17 @@ def flattened_mha_with_cache(
     if s == 1:
         # generate-only phase
         _generate_mha(
-            q, k, v, k_cache, v_cache, cache_loc, input_pos, scale, y, sinks, sliding_window
+            q,
+            k,
+            v,
+            k_cache,
+            v_cache,
+            cache_loc,
+            input_pos,
+            scale,
+            y,
+            sinks,
+            sliding_window,
         )
     else:
         # mixed context + generate phase
@@ -264,15 +284,24 @@ def flattened_mha_with_cache(
 
 @flattened_mha_with_cache.register_fake
 def flattened_mha_fake(
+    # Q, K, V
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
+    # STANDARD METADATA
+    batch_info_host: torch.Tensor,
     seq_len: torch.Tensor,
     input_pos: torch.Tensor,
     cache_loc: torch.Tensor,
-    seq_start: torch.Tensor,
+    cu_seqlen: torch.Tensor,
+    # EXTRA METADATA
+    #
+    # CACHES
     k_cache: torch.Tensor,
     v_cache: torch.Tensor,
+    # BUFFERS
+    # <none>
+    # CONSTANTS
     scale: Optional[float],
     sinks: Optional[torch.Tensor] = None,
     sliding_window: Optional[int] = None,
@@ -280,52 +309,8 @@ def flattened_mha_fake(
     return q.new_empty(*q.shape[:-1], v.shape[-1]).contiguous()
 
 
-@torch.library.custom_op(
-    "auto_deploy::triton_attention_prepare_fused_mha_metadata", mutates_args=()
-)
-def prepare_fused_mha_metadata(
-    position_ids: torch.Tensor,
-    seq_len: torch.Tensor,
-    input_pos: torch.Tensor,
-    cache_loc: torch.Tensor,
-    pages_per_seq: torch.Tensor,
-    slot_idx: torch.Tensor,
-    page_size: int,
-) -> List[torch.Tensor]:
-    # TODO: maybe use slot_idx instead of pages_per_seq??
-    num_seq = SequenceInfo._get_sanitized_num_sequences(position_ids, seq_len)
-    seq_start = torch.zeros_like(seq_len[:num_seq])
-    seq_start[1:] = torch.cumsum(seq_len[: num_seq - 1], 0)
-    return (
-        seq_len[:num_seq].clone(),
-        input_pos[:num_seq].clone(),
-        cache_loc[:num_seq].clone(),
-        seq_start,
-    )
-
-
-# TODO: Move the truncation of inputs out of this custom op
-# SequenceInfo._get_sanitized_num_sequences could break in fake mode
-@prepare_fused_mha_metadata.register_fake
-def prepare_fused_mha_metadata_fake(
-    position_ids, seq_len, input_pos, cache_loc, pages_per_seq, slot_idx, page_size
-):
-    num_seq = SequenceInfo._get_sanitized_num_sequences(position_ids, seq_len)
-    return (
-        torch.empty_like(seq_len[:num_seq]),
-        torch.empty_like(input_pos[:num_seq]),
-        torch.empty_like(cache_loc[:num_seq]),
-        torch.empty_like(seq_len[:num_seq]),
-    )
-
-
 @AttentionRegistry.register("triton")
 class TritonAttention(AttentionDescriptor):
-    @classmethod
-    def is_paged(cls) -> bool:
-        """Return if the attention op is paged or not."""
-        return False
-
     @classmethod
     def get_attention_layout(cls) -> AttentionLayout:
         """Get the attention layout expected by the source op and the cached attention op."""
@@ -342,16 +327,16 @@ class TritonAttention(AttentionDescriptor):
 
     @classmethod
     def get_cached_attention_op(cls) -> MHACallable:
-        return torch.ops.auto_deploy.triton_attention_flattened_mha_with_cache
+        return torch.ops.auto_deploy.triton_attention_flattened_mha_with_cache.default
 
     @classmethod
-    def get_prepare_metadata_op(cls) -> Tuple[PrepareMetadataCallable, int]:
-        return torch.ops.auto_deploy.triton_attention_prepare_fused_mha_metadata, 4
+    def get_standard_metadata_args(cls) -> List[str]:
+        return ["batch_info_host", "seq_len", "input_pos", "cache_loc", "cu_seqlen"]
 
     @classmethod
     def get_cache_initializers(
-        cls, source_attn_node: Node, cache_config: CacheConfig
-    ) -> CacheInitializerDict:
+        cls, source_attn_node: Node, cache_config: KvCacheConfig
+    ) -> ResourceHandlerDict:
         # source op is [bsnd] layout already
         k_fake: FakeTensor = source_attn_node.args[1].meta["val"]
         v_fake: FakeTensor = source_attn_node.args[2].meta["val"]
@@ -359,33 +344,18 @@ class TritonAttention(AttentionDescriptor):
         k_head_dim = k_fake.shape[3]
         v_head_dim = v_fake.shape[3]
 
-        def _get_k_cache(si: SequenceInfo):
-            assert not si.is_paged, "Paged cache not supported for triton"
-            return torch.empty(
-                si.num_pages,
-                si.page_size,
+        return {
+            "k_cache": UnpagedResourceHandler(
                 num_kv_heads,
                 k_head_dim,
-                device=si.device,
-                dtype=cache_config.dtype or k_fake.dtype,
-            )
-
-        def _get_v_cache(si: SequenceInfo):
-            assert not si.is_paged, "Paged cache not supported for triton"
-            return torch.empty(
-                si.num_pages,
-                si.page_size,
+                dtype=cls.resolve_cache_dtype(cache_config.dtype, k_fake.dtype),
+            ),
+            "v_cache": UnpagedResourceHandler(
                 num_kv_heads,
                 v_head_dim,
-                device=si.device,
-                dtype=cache_config.dtype or v_fake.dtype,
-            )
-
-        return {"k_cache": _get_k_cache, "v_cache": _get_v_cache}
-
-    @classmethod
-    def get_global_buffer_initializers(cls, source_attn_node: Node) -> BufferInitializerDict:
-        return {}
+                dtype=cls.resolve_cache_dtype(cache_config.dtype, v_fake.dtype),
+            ),
+        }
 
     @classmethod
     def get_constants(cls, source_attn_node: Node) -> List[Constant]:

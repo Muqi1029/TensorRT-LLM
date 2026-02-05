@@ -43,8 +43,13 @@ class LlavaNextInputProcessor(BaseMultimodalInputProcessor,
                  model_path: str,
                  config: PretrainedConfig,
                  tokenizer: AutoTokenizer,
-                 trust_remote_code: bool = True):
-        super().__init__()
+                 trust_remote_code: bool = True,
+                 **kwargs):
+        super().__init__(model_path=model_path,
+                         config=config,
+                         tokenizer=tokenizer,
+                         trust_remote_code=trust_remote_code,
+                         **kwargs)
         self._config = config
         self._tokenizer = tokenizer if tokenizer is not None else AutoTokenizer.from_pretrained(
             model_path,
@@ -522,6 +527,8 @@ class LlavaNextModel(PreTrainedModel):
             return
         if not DISAGG:
             self.mm_encoder = LlavaNextVisionModel(model_config)
+        else:
+            self.mm_encoder = None
 
         llm_model_config = copy.deepcopy(model_config)
         llm_model_config.pretrained_config = model_config.pretrained_config.text_config
@@ -540,7 +547,8 @@ class LlavaNextModel(PreTrainedModel):
         if isinstance(weight_mapper, LlavaNextHfWeightMapper):
             weights = weight_mapper.preprocess_weights(weights)
 
-        self.mm_encoder.load_weights(weights)
+        if self.mm_encoder is not None:
+            self.mm_encoder.load_weights(weights)
 
         def filter_weights(weights: Dict):
             transformed_weights = {}

@@ -503,7 +503,7 @@ TrtGptModelInflightBatching::~TrtGptModelInflightBatching()
 {
     if (mCacheTransceiver)
     {
-        mCacheTransceiver->checkContextTransferStatus(true);
+        mCacheTransceiver->checkContextTransferStatus(1, true);
         TLLM_CHECK_WITH_INFO(mCacheTransceiver->checkGenTransferComplete(), "Generation transfer not complete");
     }
     if (mAsyncSendWaitThread)
@@ -881,8 +881,6 @@ void TrtGptModelInflightBatching::forwardSync()
             }
         }
 
-        (*mPauseRequests)(currRequests.contextRequests, mInflightReqIds, mReqIdsToPause, true, *mSeqSlotManager,
-            mKvCacheManager, mCrossKvCacheManager, mPeftCacheManager);
         (*mPauseRequests)(currRequests.generationRequests, mInflightReqIds, mReqIdsToPause, true, *mSeqSlotManager,
             mKvCacheManager, mCrossKvCacheManager, mPeftCacheManager);
 
@@ -934,7 +932,7 @@ void TrtGptModelInflightBatching::forwardSync()
     }
     if (mCacheTransceiver)
     {
-        mCacheTransceiver->checkContextTransferStatus(0);
+        mCacheTransceiver->checkContextTransferStatus(0, true);
     }
     ++mIterCounter;
 
@@ -1027,7 +1025,7 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
                 mIterCounter);
             if (mCacheTransceiver)
             {
-                mCacheTransceiver->checkContextTransferStatus(1);
+                mCacheTransceiver->checkContextTransferStatus(1, true);
                 // will free kvCache in next iteration.
             }
         }
@@ -1051,13 +1049,22 @@ void TrtGptModelInflightBatching::forwardAsync(RequestList const& activeRequests
             {
                 NVTX3_SCOPED_RANGE(updateInflightReqIds);
                 // Add requests to in-flight set, so they can be skipped in other micro batches
-                for (auto const& requests : {currRequests.contextRequests, currRequests.generationRequests})
+                for (auto const& llmReq : currRequests.contextRequests)
                 {
-                    for (auto const& llmReq : requests)
+                    // Context requests that are chunking are not added to inflight set, so they are scheduled in the
+                    // next micro batch.
+                    if (llmReq->isLastContextChunk())
                     {
-                        TLLM_LOG_DEBUG("request with ID %lu added to DECODER model inflight set", llmReq->mRequestId);
+                        TLLM_LOG_DEBUG(
+                            "Context request with ID %lu added to DECODER model inflight set", llmReq->mRequestId);
                         mInflightReqIds.insert(llmReq->mRequestId);
                     }
+                }
+                for (auto const& llmReq : currRequests.generationRequests)
+                {
+                    TLLM_LOG_DEBUG(
+                        "Generation request with ID %lu added to DECODER model inflight set", llmReq->mRequestId);
+                    mInflightReqIds.insert(llmReq->mRequestId);
                 }
             }
 
@@ -1556,8 +1563,6 @@ void TrtGptModelInflightBatching::createBuffers(executor::DecodingConfig const& 
         mSlotDecoderBuffers.emplace_back(std::make_unique<SlotDecoderBuffers>(
             mOperatingBeamWidth, getMaxSequenceLen(), mRuntime->getBufferManager()));
     }
-
-    mDecodingInputs.resize(mNumMicroBatches);
 
     TLLM_LOG_TRACE("%s stop", __PRETTY_FUNCTION__);
 }
@@ -2073,11 +2078,9 @@ runtime::CudaEvent TrtGptModelInflightBatching::decoderStepAsync(ScheduledReques
     auto const fusedBufferId = getFusedBufferId();
     auto& fusedRuntimeBuffers = mBuffers.at(fusedBufferId);
 
-    auto& decodingInput = mDecodingInputs.at(mMicroBatchId);
-    decodingInput = (*mMakeDecodingBatchInputOutput)(mDecoderInputBuffers.at(fusedBufferId), *mDecoderState,
-        mModelConfig, getMaxNumSequences(), *fusedRuntimeBuffers);
+    (*mMakeDecodingBatchInputOutput)(decoderInputBuffers, *mDecoderState, mModelConfig, *fusedRuntimeBuffers);
 
-    auto decoderFinishEvent = mDecoder->forwardAsync(*mDecoderState, *decodingInput);
+    auto decoderFinishEvent = mDecoder->forwardAsync(*mDecoderState, decoderInputBuffers);
 
     auto const returnLogProbs = batchReturnLogProbs(scheduledRequests);
     auto updateDecoderBuffersEvent = (*mUpdateDecoderBuffers)(mModelConfig, mDecoderOutputBuffers.at(fusedBufferId),

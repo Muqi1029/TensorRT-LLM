@@ -83,7 +83,6 @@ common-files: &common_files |
         examples/infinitebench/compute_scores.py |
         examples/infinitebench/construct_synthetic_dataset.py |
         examples/infinitebench/eval_utils.py |
-        examples/layer_wise_benchmarks/run_single.py |
         examples/llm-api/_tensorrt_engine/llm_eagle_decoding.py |
         examples/llm-api/_tensorrt_engine/llm_eagle2_decoding.py |
         examples/llm-api/_tensorrt_engine/llm_inference_customize.py |
@@ -811,7 +810,6 @@ common-files: &common_files |
         tensorrt_llm/serve/tool_parser/utils.py |
         tensorrt_llm/tools/__init__.py |
         tensorrt_llm/tools/importlib_utils.py |
-        tensorrt_llm/tools/layer_wise_benchmarks/deepseekv3_runner.py |
         tensorrt_llm/tools/multimodal_builder.py |
         tensorrt_llm/tools/onnx_utils.py |
         tensorrt_llm/tools/plugin_gen/__init__.py |
@@ -953,7 +951,6 @@ common-files: &common_files |
         tests/unittest/_torch/attention/test_attention_no_cache.py |
         tests/unittest/_torch/attention/test_attention.py |
         tests/unittest/_torch/attention/test_flashinfer_attention.py |
-        tests/unittest/_torch/attention/test_flashinfer_star_attn.py |
         tests/unittest/_torch/attention/test_vanilla_attention.py |
         tests/unittest/_torch/compilation/test_add_norm.py |
         tests/unittest/_torch/debugger/test_debugger_addon.py |
@@ -1006,7 +1003,6 @@ common-files: &common_files |
         tests/unittest/_torch/multi_gpu/test_mnnvl_allreduce.py |
         tests/unittest/_torch/multi_gpu/test_mnnvl_memory.py |
         tests/unittest/_torch/multi_gpu/test_moe_a2a.py |
-        tests/unittest/_torch/multi_gpu/test_star_attention.py |
         tests/unittest/_torch/multi_gpu/test_user_buffers.py |
         tests/unittest/_torch/multimodal/test_external_embedding.py |
         tests/unittest/_torch/multimodal/test_find_num_image_tokens.py |
@@ -1024,7 +1020,6 @@ common-files: &common_files |
         tests/unittest/_torch/ray_orchestrator/single_gpu/test_cache_transceiver_comm.py |
         tests/unittest/_torch/sampler/test_beam_search.py |
         tests/unittest/_torch/sampler/test_best_of_n.py |
-        tests/unittest/_torch/sampler/test_return_logits.py |
         tests/unittest/_torch/sampler/test_torch_multi_arange.py |
         tests/unittest/_torch/sampler/test_trtllm_sampler.py |
         tests/unittest/_torch/speculative/test_draft_target.py |
@@ -1061,7 +1056,6 @@ common-files: &common_files |
         tests/unittest/_torch/thop/parallel/test_logits_bitmask_op.py |
         tests/unittest/_torch/thop/parallel/test_mamba_conv1d_op.py |
         tests/unittest/_torch/thop/parallel/test_mamba2_chunk_ss_update.py |
-        tests/unittest/_torch/thop/parallel/test_moe.py |
         tests/unittest/_torch/thop/parallel/test_noaux_tc.py |
         tests/unittest/_torch/thop/parallel/test_scaled_mm.py |
         tests/unittest/_torch/thop/parallel/test_selective_scan_op.py |
@@ -1073,6 +1067,7 @@ common-files: &common_files |
         tests/unittest/_torch/thop/parallel/test_weight_only_quant_gemm.py |
         tests/unittest/_torch/thop/parallel/test_weight_only_quant_linear.py |
         tests/unittest/_torch/thop/serial/test_moe_alltoall.py |
+        tests/unittest/_torch/thop/serial/test_moe.py |
         tests/unittest/api_stability/api_stability_core.py |
         tests/unittest/api_stability/test_llm_api.py |
         tests/unittest/bindings/binding_test_utils.py |
@@ -1188,7 +1183,6 @@ common-files: &common_files |
         tests/unittest/tools/plugin_gen/test_core.py |
         tests/unittest/tools/plugin_gen/test_plugin_gen.py |
         tests/unittest/tools/plugin_gen/test_shape_infer.py |
-        tests/unittest/tools/test_layer_wise_benchmarks.py |
         tests/unittest/tools/test_prepare_dataset.py |
         tests/unittest/tools/test_test_to_stage_mapping.py |
         tests/unittest/trt/__init__.py |
@@ -1372,6 +1366,9 @@ common-files: &common_files |
         triton_backend/tools/whisper/client.py |
     )$
 
+# Global exclude pattern for vendored third-party code
+exclude: '^triton_kernels/'
+
 default_install_hook_types: [pre-commit, commit-msg]
 repos:
 -   repo: https://github.com/pycqa/isort
@@ -1389,7 +1386,7 @@ repos:
     -   id: yapf
         files: *common_files
 -   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.1.0
+    rev: v6.0.0
     hooks:
     -   id: check-added-large-files
         exclude: |
@@ -1398,8 +1395,10 @@ repos:
     -   id: check-symlinks
     -   id: detect-private-key
     -   id: end-of-file-fixer
+        exclude: |
+            (?x)^(.*cubin.cpp | .*cubin.h)$
     -   id: check-yaml
-        args: [--allow-multiple-documents]
+        args: [--allow-multiple-documents, --unsafe]
         exclude: ".*/gitlab/.*.yml"
     -   id: trailing-whitespace
         exclude: '\.(patch|md)$'
@@ -1442,7 +1441,7 @@ repos:
         additional_dependencies:
         - tomli
         # add ignore words list
-        args: ["-L", "Mor,ans,thirdparty", "--skip", "ATTRIBUTIONS-*.md,*.svg", "--skip", "security_scanning/*"]
+        args: ["-L", "Mor,ans,thirdparty,subtiles", "--skip", "ATTRIBUTIONS-*.md,*.svg", "--skip", "security_scanning/*"]
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.4
     hooks:
@@ -1463,6 +1462,11 @@ repos:
         entry: ./scripts/format_test_list.py
         language: script
         files: tests/integration/test_lists/.*\.txt$
+    -   id: waive list check
+        name: Checks for duplicated test items in waives.txt
+        entry: ./scripts/check_test_list.py --check-duplicate-waives
+        language: script
+        pass_filenames: false
     -   id: DCO check
         name: Checks the commit message for a developer certificate of origin signature
         entry: ./scripts/dco_check.py

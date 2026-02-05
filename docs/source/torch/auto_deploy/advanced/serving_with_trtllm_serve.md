@@ -30,13 +30,13 @@ curl -s http://localhost:8000/v1/chat/completions \
 
 ## Configuration via YAML
 
-Use `--extra_llm_api_options` to supply a YAML file that augments or overrides server/runtime settings.
+Use `--config` to supply a YAML file that augments or overrides server/runtime settings.
 
 ```bash
 trtllm-serve \
   meta-llama/Llama-3.1-8B \
   --backend _autodeploy \
-  --extra_llm_api_options autodeploy_config.yaml
+  --config autodeploy_config.yaml
 ```
 
 Example `autodeploy_config.yaml`:
@@ -55,13 +55,16 @@ max_batch_size: 256
 world_size: 1
 
 # transform options
+# KV cache configuration
+kv_cache_config:
+  # fraction of free memory to use for kv-caches
+  free_gpu_memory_fraction: 0.9
+
+# transform options
 transforms:
   insert_cached_attention:
     # attention backend
     backend: flashinfer
-  resize_kv_cache:
-    # fraction of free memory to use for kv-caches
-    free_mem_ratio: 0.8
   compile_model:
     # compilation backend
     backend: torch-opt
@@ -77,7 +80,7 @@ transforms:
   - Prefer `compile_backend: torch-opt`
   - Use `attn_backend: flashinfer`
   - Set realistic `cuda_graph_batch_sizes` that match expected traffic
-  - Tune `free_mem_ratio` to 0.8–0.9
+  - Tune `kv_cache_config.free_gpu_memory_fraction` to 0.8–0.9
 
 ## See also
 

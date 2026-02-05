@@ -9,7 +9,6 @@ from tensorrt_llm._torch.auto_deploy.utils.pattern_matcher import (
     register_ad_pattern,
 )
 
-from ...custom_ops.fused_moe.mxfp4_moe import IS_TRITON_KERNELS_AVAILABLE
 from ...utils.module import get_submodule_of_param
 from ...utils.node_utils import is_op
 from ..interface import BaseTransform, TransformInfo, TransformRegistry
@@ -116,8 +115,8 @@ class MatchMOEDenseMLP(BaseTransform):
         info = TransformInfo(
             skipped=False,
             num_matches=num_matches,
-            is_clean=False,
-            has_valid_shapes=False,
+            is_clean=num_matches == 0,
+            has_valid_shapes=num_matches == 0,
         )
         return gm, info
 
@@ -220,11 +219,7 @@ class InsertMXFP4MLP(BaseTransform):
         shared_config,
     ) -> Tuple[GraphModule, TransformInfo]:
         qcfg = factory.get_quant_config()
-        if (
-            not qcfg
-            or qcfg.get("quant_method", "") != self.algo_name
-            or not IS_TRITON_KERNELS_AVAILABLE
-        ):
+        if not qcfg or qcfg.get("quant_method", "") != self.algo_name:
             return gm, TransformInfo(
                 skipped=True, num_matches=0, is_clean=True, has_valid_shapes=True
             )
@@ -314,7 +309,7 @@ class InsertMXFP4MLP(BaseTransform):
         info = TransformInfo(
             skipped=(num_matches == 0),
             num_matches=num_matches,
-            is_clean=False,
-            has_valid_shapes=True,
+            is_clean=num_matches == 0,
+            has_valid_shapes=num_matches == 0,
         )
         return gm, info

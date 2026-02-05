@@ -24,7 +24,7 @@ As in the PyTorch workflow, AutoDeploy does not require a separate `trtllm-bench
 
 ## Advanced Configuration
 
-For more granular control over AutoDeploy's behavior during benchmarking, use the `--extra_llm_api_options` flag with a YAML configuration file:
+For more granular control over AutoDeploy's behavior during benchmarking, use the `--config` flag with a YAML configuration file:
 
 ```bash
 trtllm-bench \
@@ -32,7 +32,7 @@ trtllm-bench \
   throughput \
   --dataset /tmp/synthetic_128_128.txt \
   --backend _autodeploy \
-  --extra_llm_api_options autodeploy_config.yaml
+  --config autodeploy_config.yaml
 ```
 
 ### Configuration Examples
@@ -50,13 +50,16 @@ skip_loading_weights: false
 max_batch_size: 256
 
 # transform options
+# KV cache configuration
+kv_cache_config:
+  # fraction of free memory to use for kv-caches
+  free_gpu_memory_fraction: 0.9
+
+# transform options
 transforms:
   insert_cached_attention:
     # attention backend
     backend: flashinfer
-  resize_kv_cache:
-    # fraction of free memory to use for kv-caches
-    free_mem_ratio: 0.8
   compile_model:
     # compilation backend
     backend: torch-opt
@@ -74,7 +77,7 @@ Enable multi-GPU execution by specifying `--tp n`, where `n` is the number of GP
 |-----------|---------|-------------|
 | `compile_backend` | `torch-compile` | Compilation backend: `torch-simple`, `torch-compile`, `torch-cudagraph`, `torch-opt` |
 | `runtime` | `trtllm` | Runtime engine: `trtllm`, `demollm` |
-| `free_mem_ratio` | `0.0` | Fraction of available GPU memory for KV cache (0.0-1.0) |
+| `kv_cache_config.free_gpu_memory_fraction` | `0.9` | Fraction of available GPU memory for KV cache (0.0-1.0) |
 | `skip_loading_weights` | `false` | Skip weight loading for architecture-only benchmarks |
 
 ### CUDA Graph Optimization
@@ -89,7 +92,7 @@ For optimal CUDA graph performance, specify batch sizes that match your expected
 
 ## Performance Optimization Tips
 
-1. **Memory Management**: Set `free_mem_ratio` to 0.8-0.9 for optimal KV cache utilization
+1. **Memory Management**: Set `kv_cache_config.free_gpu_memory_fraction` to 0.8-0.9 for optimal KV cache utilization
 1. **Compilation Backend**: Use `torch-opt` for production workloads
 1. **Attention Backend**: `flashinfer` generally provides the best performance for most models
 1. **CUDA Graphs**: Enable CUDA graphs for batch sizes that match your production traffic patterns.

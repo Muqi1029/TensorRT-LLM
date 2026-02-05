@@ -1,26 +1,30 @@
-from typing import List, Tuple
+# SPDX-FileCopyrightText: Copyright (c) 2022-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from typing import List
 
 import torch
-from torch._ops import OpOverloadPacket
-from torch.fx import Node
 
-# Triton kernels
-from tensorrt_llm._torch.modules.mamba.mamba2_metadata import cu_seqlens_to_chunk_indices_offsets
 from tensorrt_llm._torch.modules.mamba.selective_state_update import selective_state_update
-from tensorrt_llm._torch.modules.mamba.ssd_combined import mamba_chunk_scan_combined
 
-from ...utils.node_utils import extract_op_args
-from ..attention_interface import (
-    AttentionDescriptor,
-    AttentionLayout,
-    AttentionRegistry,
-    BufferInitializerDict,
-    CacheConfig,
-    CacheInitializerDict,
-    Constant,
-    MHACallable,
-    PrepareMetadataCallable,
-    SequenceInfo,
+from ..attention_interface import AttentionRegistry, MHACallable
+from .mamba_backend_common import (
+    BaseBackendSSM,
+    _flatten_ssm_inputs,
+    _prepare_ssm_decode_inputs,
+    _run_ssm_prefill,
 )
 
 
@@ -34,139 +38,112 @@ def _triton_cached_ssm(
     D: torch.Tensor,  # [num_heads]
     dt: torch.Tensor,  # [b, s, num_heads]
     dt_bias: torch.Tensor,  # [num_heads]
-    # METADATA
-    seq_len: torch.Tensor,  # [num_seq]
-    seq_start: torch.Tensor,  # [num_seq]
-    slot_idx: torch.Tensor,  # [num_seq]
-    use_initial_states: torch.Tensor,  # [num_seq]
+    # STANDARD METADATA
+    batch_info_host: torch.Tensor,
+    cu_seqlen: torch.Tensor,
+    slot_idx: torch.Tensor,
+    use_initial_states: torch.Tensor,
+    # EXTRA METADATA
+    chunk_indices: torch.Tensor,  # [num_logical_chunks]
+    chunk_offsets: torch.Tensor,  # [num_logical_chunks]
+    seq_idx_prefill: torch.Tensor,  # [1, num_prefill_tokens]
     # CACHES
     ssm_state_cache: torch.Tensor,  # [max_batch_size, num_heads, head_dim, ssm_state_size]
     # CONSTANTS
     time_step_limit: List[float],
     chunk_size: int,
 ) -> torch.Tensor:
-    """Flattened cached SSM transform op that respects slot-indexed state caches.
-
-    Split mixed batches into prefill (seq_len>1) and decode (seq_len==1):
-    - Prefill: run one varlen combined scan over concatenated prefill tokens and update final states per slot.
-    - Decode: batch single-token updates with selective_state_update and update states per slot.
-    """
-    b, s = hidden_states.shape[:2]
-    num_seq = seq_len.shape[0]
-    # Flatten tokens for indexing/scatter
-    bs = b * s
-    device = hidden_states.device
-    hs_flat = hidden_states.reshape(bs, *hidden_states.shape[2:])  # [bs, H, D]
-    B_flat = B.reshape(bs, *B.shape[2:])  # [bs, G, N]
-    C_flat = C.reshape(bs, *C.shape[2:])  # [bs, G, N]
-    dt_flat = dt.reshape(bs, dt.shape[2])  # [bs, H]
-
-    y = torch.empty_like(hidden_states, memory_format=torch.contiguous_format)
-    y_flat = y.view(bs, *y.shape[2:])
-
-    num_heads = hidden_states.shape[2]
-    head_dim = hidden_states.shape[3]
+    b, s, num_heads, head_dim, bs, hs_flat, B_flat, C_flat, dt_flat = _flatten_ssm_inputs(
+        hidden_states, B, C, dt
+    )
     ssm_state_size = B.shape[3]
+    # Preallocate output tensor to avoid memcpy cost for merging prefill
+    # and decode outputs
+    preallocated_ssm_out = torch.empty(
+        [bs, num_heads, head_dim],
+        dtype=hidden_states.dtype,
+        device=hidden_states.device,
+    )
+    num_prefill, num_prefill_tokens, num_decode = batch_info_host.tolist()
+    num_seq = num_prefill + num_decode
+    num_total_tokens = num_prefill_tokens + num_decode
+    preallocated_ssm_out_p = preallocated_ssm_out[:num_prefill_tokens]
+    preallocated_ssm_out_d = preallocated_ssm_out[num_prefill_tokens:num_total_tokens]
 
-    if s == 1:
-        num_prefill = 0
-        num_decode = num_seq
-    else:
-        prefill_mask = seq_len > 1
-        num_prefill = int(prefill_mask.sum().item())
-        num_decode = num_seq - num_prefill
+    num_prefill, num_prefill_tokens, num_total_tokens, num_seq = _run_ssm_prefill(
+        hs_flat,
+        B_flat,
+        C_flat,
+        dt_flat,
+        A,
+        D,
+        dt_bias,
+        batch_info_host,
+        cu_seqlen,
+        slot_idx,
+        use_initial_states,
+        chunk_indices,
+        chunk_offsets,
+        seq_idx_prefill,
+        ssm_state_cache,
+        time_step_limit,
+        chunk_size,
+        preallocated_ssm_out_p.unsqueeze(0),
+    )
 
-    # Prefill: concatenate tokens at the front and run combined scan
-    if num_prefill > 0:
-        seq_len_prefill = seq_len[:num_prefill].to(torch.int32)
-        total_prefill_tokens = int(seq_len_prefill.sum().item())
+    num_decode = num_total_tokens - num_prefill_tokens
+    decode_inputs = _prepare_ssm_decode_inputs(
+        hs_flat,
+        B_flat,
+        C_flat,
+        dt_flat,
+        A,
+        D,
+        dt_bias,
+        slot_idx,
+        num_prefill,
+        num_prefill_tokens,
+        num_seq,
+        num_total_tokens,
+        num_heads,
+        head_dim,
+        ssm_state_size,
+    )
 
-        hs_prefill = hs_flat[:total_prefill_tokens].unsqueeze(0)  # [1, S_p, H, D]
-        B_prefill = B_flat[:total_prefill_tokens].unsqueeze(0)  # [1, S_p, G, N]
-        C_prefill = C_flat[:total_prefill_tokens].unsqueeze(0)  # [1, S_p, G, N]
-        dt_prefill = dt_flat[:total_prefill_tokens].unsqueeze(0)  # [1, S_p, H]
-
-        cu_seqlens = torch.cat(
-            [
-                torch.zeros(1, dtype=torch.int32, device=device),
-                torch.cumsum(seq_len_prefill, dim=0),
-            ],
-            dim=0,
-        )
-        seq_ids = torch.arange(num_prefill, device=device, dtype=torch.int32)
-        seq_idx_prefill = torch.repeat_interleave(seq_ids, seq_len_prefill).view(1, -1)
-
-        initial_states = chunk_indices = chunk_offsets = None
-        if torch.any(use_initial_states[:num_prefill]):
-            initial_states = torch.where(
-                use_initial_states[:num_prefill, None, None, None],
-                ssm_state_cache[slot_idx[:num_prefill]],
-                0,
-            )
-            chunk_indices, chunk_offsets = cu_seqlens_to_chunk_indices_offsets(
-                cu_seqlens, chunk_size
-            )
-        y_prefill, varlen_states = mamba_chunk_scan_combined(
-            hs_prefill,
-            dt_prefill,
-            A,
-            B_prefill,
-            C_prefill,
-            chunk_size=chunk_size,
-            D=D,
-            z=None,
-            dt_bias=dt_bias,
-            initial_states=initial_states,
-            seq_idx=seq_idx_prefill,
-            chunk_indices=chunk_indices,
-            chunk_offsets=chunk_offsets,
-            cu_seqlens=cu_seqlens,
-            dt_softplus=True,
-            dt_limit=(time_step_limit[0], time_step_limit[1]),
-            return_final_states=False,
-            return_varlen_states=True,
-        )
-
-        y_flat[:total_prefill_tokens] = y_prefill[0].to(y_flat.dtype)
-        ssm_state_cache.index_copy_(
-            0, slot_idx[:num_prefill].to(torch.long), varlen_states.to(ssm_state_cache.dtype)
-        )
-
-    # Decode: batch single-token updates via selective_state_update
-    if num_decode > 0:
-        total_prefill_tokens = 0 if num_prefill == 0 else int(seq_len[:num_prefill].sum().item())
-        slot_idx_decode = slot_idx[num_prefill:].to(torch.long)
-
-        x_decode = hs_flat[total_prefill_tokens : total_prefill_tokens + num_decode]  # [nd, H, D]
-        B_decode = B_flat[total_prefill_tokens : total_prefill_tokens + num_decode]  # [nd, G, N]
-        C_decode = C_flat[total_prefill_tokens : total_prefill_tokens + num_decode]  # [nd, G, N]
-        dt_decode = dt_flat[total_prefill_tokens : total_prefill_tokens + num_decode]  # [nd, H]
-
-        dt_hp = dt_decode[:, :, None].expand(-1, num_heads, head_dim)
-        dt_bias_hp = dt_bias[..., None].expand(num_heads, head_dim)
-        dt_pre = torch.nn.functional.softplus(dt_hp + dt_bias_hp.to(dtype=dt_hp.dtype))
-        dt_pre = torch.clamp(dt_pre, time_step_limit[0], time_step_limit[1])
-        A_full = A[..., None, None].expand(num_heads, head_dim, ssm_state_size)
-        D_full = D[..., None].expand(num_heads, head_dim)
-
-        dt_bias_zero = torch.zeros_like(dt_bias_hp)
-        y_dec = selective_state_update(
+    if decode_inputs is not None:
+        (
+            slot_idx_decode,
+            x_decode,
+            B_decode,
+            C_decode,
+            dt_hp,
+            dt_bias_hp,
+            A_full,
+            D_full,
+        ) = decode_inputs
+        selective_state_update(
             ssm_state_cache,
             x_decode,
-            dt_pre,
+            dt_hp,
             A_full,
             B_decode,
             C_decode,
             D=D_full,
             z=None,
-            dt_bias=dt_bias_zero,
-            dt_softplus=False,
+            dt_bias=dt_bias_hp,
+            dt_softplus=True,
             state_batch_indices=slot_idx_decode,
-        )  # [nd, H, D]
+            out=preallocated_ssm_out_d,
+        )
 
-        y_flat[total_prefill_tokens : total_prefill_tokens + num_decode] = y_dec.to(y_flat.dtype)
-
-    return y
+    if num_total_tokens > 0:
+        return (
+            preallocated_ssm_out[:num_total_tokens]
+            .view(b, s, num_heads, head_dim)
+            .to(hidden_states.dtype)
+        )
+    else:
+        return torch.empty_like(hidden_states)
 
 
 @_triton_cached_ssm.register_fake
@@ -179,11 +156,15 @@ def _triton_cached_ssm_fake(
     D: torch.Tensor,  # [num_heads]
     dt: torch.Tensor,  # [b, s, num_heads]
     dt_bias: torch.Tensor,  # [num_heads]
-    # METADATA
-    seq_len: torch.Tensor,  # [num_seq]
-    seq_start: torch.Tensor,  # [num_seq]
-    slot_idx: torch.Tensor,  # [num_seq]
-    use_initial_states: torch.Tensor,  # [num_seq]
+    # STANDARD METADATA
+    batch_info_host: torch.Tensor,
+    cu_seqlen: torch.Tensor,
+    slot_idx: torch.Tensor,
+    use_initial_states: torch.Tensor,
+    # EXTRA METADATA
+    chunk_indices: torch.Tensor,  # [num_logical_chunks]
+    chunk_offsets: torch.Tensor,  # [num_logical_chunks]
+    seq_idx_prefill: torch.Tensor,  # [1, num_prefill_tokens]
     # CACHES
     ssm_state_cache: torch.Tensor,  # [max_batch_size, num_heads, head_dim, ssm_state_size]
     # CONSTANTS
@@ -198,74 +179,8 @@ def _triton_cached_ssm_fake(
     )
 
 
-## Note: we reuse the existing metadata custom op and its registered fake from torch backend.
-
-
 @AttentionRegistry.register("triton_ssm")
-class TritonBackendSSM(AttentionDescriptor):
-    @classmethod
-    def is_paged(cls) -> bool:
-        return True
-
-    @classmethod
-    def get_attention_layout(cls) -> AttentionLayout:
-        # Hidden states follow [b, s, n, d]
-        return "bsnd"
-
-    @classmethod
-    def get_num_qkv_args(cls) -> int:
-        # torch_ssm_transform signature has 7 node/state arguments
-        return 7
-
-    @classmethod
-    def get_source_attention_op(cls) -> OpOverloadPacket:
-        # Keep source op unchanged (used for uncached pre-export)
-        return torch.ops.auto_deploy.torch_ssm
-
+class TritonBackendSSM(BaseBackendSSM):
     @classmethod
     def get_cached_attention_op(cls) -> MHACallable:
-        return torch.ops.auto_deploy.triton_cached_ssm
-
-    @classmethod
-    def get_prepare_metadata_op(cls) -> Tuple[PrepareMetadataCallable, int]:
-        # Returns (seq_len, seq_start, slot_idx, use_initial_states)
-        return torch.ops.auto_deploy.torch_ssm_prepare_metadata, 4
-
-    @classmethod
-    def get_cache_initializers(
-        cls, source_attn_node: Node, cache_config: CacheConfig
-    ) -> CacheInitializerDict:
-        # Shapes from fake tensors
-        hs_fake: torch.Tensor = source_attn_node.args[0].meta["val"]
-        B_fake: torch.Tensor = source_attn_node.args[2].meta["val"]
-
-        num_heads = hs_fake.shape[-2]
-        head_dim = hs_fake.shape[-1]
-
-        if B_fake.ndim >= 4:
-            ssm_state_size = B_fake.shape[-1]
-        else:
-            ssm_state_size = max(1, B_fake.shape[-1])
-
-        def _get_ssm_cache(si: SequenceInfo):
-            return torch.empty(
-                si.max_batch_size,
-                num_heads,
-                head_dim,
-                ssm_state_size,
-                device=si.device,
-                dtype=cache_config.dtype or hs_fake.dtype,
-            )
-
-        return {"ssm_state_cache": _get_ssm_cache}
-
-    @classmethod
-    def get_global_buffer_initializers(cls, source_attn_node: Node) -> BufferInitializerDict:
-        return {}
-
-    @classmethod
-    def get_constants(cls, source_attn_node: Node) -> List[Constant]:
-        time_step_limit, chunk_size = extract_op_args(
-            source_attn_node, "time_step_limit", "chunk_size"
-        )
-        return [time_step_limit, chunk_size]
+        return torch.ops.auto_deploy.triton_cached_ssm.default

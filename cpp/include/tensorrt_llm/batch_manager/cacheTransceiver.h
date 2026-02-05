@@ -190,6 +190,14 @@ public:
         std::optional<executor::CacheTransceiverConfig> cacheTransceiverConfig = std::nullopt);
 };
 
+struct RequestStatuses
+{
+    /// Requests that have completed their transfer successfully.
+    std::unordered_set<LlmRequest::RequestIdType> completedRequestIds;
+    /// Requests that have encountered an error during their transfer.
+    std::unordered_set<LlmRequest::RequestIdType> errorRequestIds;
+};
+
 class BaseCacheTransceiver
 {
 public:
@@ -202,7 +210,10 @@ public:
     virtual void requestAndReceiveSync(LlmRequest* llmRequest) = 0;
     virtual void requestAndReceiveAsync(LlmRequest* llmRequest) = 0;
 
-    virtual void checkContextTransferStatus(std::optional<int> const& atLeastRequestNum = std::nullopt) = 0;
+    /// Check all requests transferring context, and return the requests that have completed or encountered an error.
+    virtual RequestStatuses checkContextTransferStatus(
+        std::optional<int> const& atLeastRequestNum = std::nullopt, bool markComplete = false)
+        = 0;
 
     virtual void checkGenTransferStatus(std::optional<int> const& atLeastRequestNum = std::nullopt) = 0;
 
@@ -243,7 +254,8 @@ public:
     void requestAndReceiveSync(LlmRequest* llmRequest) override;
     void requestAndReceiveAsync(LlmRequest* llmRequest) override;
 
-    void checkContextTransferStatus(std::optional<int> const& atLeastRequestNum = std::nullopt) override;
+    RequestStatuses checkContextTransferStatus(
+        std::optional<int> const& atLeastRequestNum = std::nullopt, bool markComplete = false) override;
 
     void checkGenTransferStatus(std::optional<int> const& atLeastRequestNum = std::nullopt) override;
 
@@ -269,7 +281,8 @@ private:
     std::unique_ptr<executor::kv_cache::CacheState> mCacheState;
     std::unique_ptr<executor::kv_cache::ConnectionManager> mManager;
     std::optional<executor::CacheTransceiverConfig> mCacheTransceiverConfig;
-    std::unique_ptr<kv_cache_manager::CacheTransBufferManager> mCacheTransBufferManager;
+    std::vector<std::unique_ptr<kv_cache_manager::CacheTransBufferManager>> mCacheTransBufferManagers;
+    std::vector<kv_cache_manager::CacheTransBufferManager*> mCacheTransBufferManagerPtrs;
     // library handle to the communicator related features,
     // this is used to defer dependency resolution until needed.
     static std::mutex mDllMutex;

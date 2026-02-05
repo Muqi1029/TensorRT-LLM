@@ -2,11 +2,13 @@ import copy
 import datetime
 import enum
 import json
+import os
 import weakref
 from pathlib import Path
 from queue import Queue
 from typing import Dict, List, Optional, Tuple, Union
 
+import psutil
 import torch
 
 from tensorrt_llm.logger import logger
@@ -19,7 +21,7 @@ from ..builder import ConfigEncoder, Engine, EngineConfig
 from ..llmapi.llm_args import BaseLlmArgs, PybindMirror
 from ..llmapi.tokenizer import TokenizerBase
 from ..llmapi.tracer import global_tracer
-from ..llmapi.utils import _SyncQueue, logger_debug
+from ..llmapi.utils import _SyncQueue, get_numa_aware_cpu_affinity, logger_debug
 from ..lora_manager import LoraManager
 from ..metrics import RequestEventTiming
 from ..prompt_adapter_manager import PromptAdapterManager
@@ -38,7 +40,30 @@ from .utils import (ErrorResponse, IntraProcessQueue, RequestError,
 
 __all__ = [
     "BaseWorker",
+    "_init_hf_modules",
 ]
+
+
+def _init_hf_modules():
+    """Initialize cached HuggingFace modules for models with trust_remote_code=True.
+
+    This is safe to call multiple times (idempotent) and should be called:
+    1. At module import time (for main process and spawned subprocesses)
+    2. At worker_main entry (for forked processes or external MPI ranks)
+
+    References: https://github.com/vllm-project/vllm/pull/871
+    """
+    try:
+        from transformers.dynamic_module_utils import init_hf_modules
+        init_hf_modules()
+        logger.debug("HF modules initialized")
+    except ImportError as e:
+        logger.warning(f"ImportError initializing HF modules: {e}")
+    except Exception as e:
+        logger.error(f"Exception initializing HF modules: {e}")
+
+
+_init_hf_modules()
 
 
 class BaseWorker(GenerationExecutor):
@@ -91,6 +116,58 @@ class BaseWorker(GenerationExecutor):
         if global_mpi_size() > 1:
             logger.set_rank(self.global_rank)
 
+    def _configure_affinity(self, device_id):
+        '''Probe and configure the CPU affinity of the worker based on NUMA topology.
+
+        Args:
+            device_id: The CUDA device ID to determine optimal CPU affinity.
+
+        Note:
+            If the process already has constrained affinity, a warning is logged.
+            Configuration is handled as follows:
+                TLLM_NUMA_AWARE_WORKER_AFFINITY = <unset>
+                    -> Affinity is automatically configured if it is unconstrained,
+                       and deleted if it is constrained externally by the user.
+                TLLM_NUMA_AWARE_WORKER_AFFINITY = 1
+                    -> Affinity is unconditionally auto-configured.
+                TLLM_NUMA_AWARE_WORKER_AFFINITY = 0 or any other value
+                    -> Affinity is unconditionally _not_ auto-configured.
+        '''
+
+        # Get the current affinity setting
+        pid = os.getpid()
+        process = psutil.Process(pid)
+        cpu_affinity = process.cpu_affinity()
+
+        all_cpus = list(range(psutil.cpu_count()))
+
+        constrained_affinity = (cpu_affinity != all_cpus)
+        numa_aware_affinity = os.environ.get("TLLM_NUMA_AWARE_WORKER_AFFINITY")
+
+        # If affinity is constrained but the user hasn't explicitly
+        # requested NUMA-aware affinity, remove the constraints.
+        if constrained_affinity:
+            logger.warning(
+                f"Worker process {pid} is affined to run on the following CPUs: "
+                f"{cpu_affinity} (subset of all logical CPUs). This may harm "
+                f"performance if set incorrectly.")
+            if numa_aware_affinity is None:
+                logger.warning(
+                    f"Worker process {pid} has constrained CPU affinity "
+                    f"but `TLLM_NUMA_AWARE_WORKER_AFFINITY` is not set. "
+                    f"Removing CPU affinity constraints.")
+                process.cpu_affinity(all_cpus)
+
+        # If affinity is unconstrained and the user hasn't explicitly
+        # prohibited it or the user has explicitly requested it, choose the
+        # optimal affinity based upon the NUMA topology
+        if ((numa_aware_affinity is None and not constrained_affinity)
+                or (numa_aware_affinity == "1")):
+            process.cpu_affinity(get_numa_aware_cpu_affinity(device_id))
+            logger.info(
+                f"Worker process {pid} CPU affinity set to "
+                f"{process.cpu_affinity()} for optimal NUMA-aware scheduling.")
+
     def _get_comm_ranks_device_id(self):
         device_id = self.global_rank % torch.cuda.device_count()
         torch.cuda.set_device(device_id)
@@ -98,6 +175,9 @@ class BaseWorker(GenerationExecutor):
         global_rank = global_mpi_rank()
         comm_ranks = mpi_comm().allgather(global_rank)
         device_ids = mpi_comm().allgather(device_id)
+
+        self._configure_affinity(device_id)
+
         return comm_ranks, device_ids
 
     def setup_engine(self):
@@ -128,7 +208,7 @@ class BaseWorker(GenerationExecutor):
                     create_autodeploy_executor
                 create_executor = create_autodeploy_executor
                 assert isinstance(self.llm_args, ADLlmArgs)
-                args["ad_config"] = self.llm_args.get_pytorch_backend_config()
+                args["ad_config"] = self.llm_args
                 args["tokenizer"] = self._tokenizer
             else:
                 raise ValueError(f"Unsupported backend config: {self._backend}")
@@ -137,7 +217,7 @@ class BaseWorker(GenerationExecutor):
             self.mapping = self.llm_args.parallel_config.to_mapping()
             self.checkpoint_loader = None
             if self._backend == "pytorch":
-                from tensorrt_llm._torch.pyexecutor.config import \
+                from tensorrt_llm._torch.pyexecutor.model_loader import \
                     _construct_checkpoint_loader
                 self.checkpoint_loader = _construct_checkpoint_loader(
                     self.llm_args.backend, self.llm_args.checkpoint_loader,
@@ -353,6 +433,8 @@ class BaseWorker(GenerationExecutor):
 
         context_phase_params = None
         request_type = tllm.RequestType.REQUEST_TYPE_CONTEXT_AND_GENERATION
+        disagg_request_id = 0
+
         if request.disaggregated_params is not None:
             assert (
                 not self._is_pytorch_backend
@@ -361,19 +443,18 @@ class BaseWorker(GenerationExecutor):
                 == "context_and_generation"
             ), "kv_cache_transceiver is disabled, please set 'cache_transceiver_config: backend:<backend_type>` in config file for disaggregated serving"
             request_type = request.disaggregated_params.get_request_type()
+            disagg_request_id = request.disaggregated_params.disagg_request_id
             if request_type == tllm.RequestType.REQUEST_TYPE_GENERATION_ONLY:
                 context_phase_params = request.disaggregated_params.get_context_phase_params(
                 )
 
-        if self._is_pytorch_backend:
-            if not self.llm_args.disable_overlap_scheduler:
-                is_disaggregated = self.engine.kv_cache_transceiver is not None
-                if is_disaggregated and (
-                        request_type
-                        == tllm.RequestType.REQUEST_TYPE_CONTEXT_ONLY):
-                    raise ValueError(
-                        "Context only requests are not supported in pytorch backend when overlap is enabled."
-                    )
+        if self._is_pytorch_backend and not self.llm_args.disable_overlap_scheduler \
+                and self.llm_args.kv_cache_config.enable_block_reuse \
+                and self.engine.kv_cache_transceiver is not None \
+                and request_type == tllm.RequestType.REQUEST_TYPE_CONTEXT_ONLY:
+            raise ValueError(
+                "Context only requests are not supported in pytorch backend when overlap is enabled with block reuse."
+            )
 
         assert request.id is not None
 
@@ -416,25 +497,27 @@ class BaseWorker(GenerationExecutor):
             splited_prompt_len = int(len(prompt_token_ids) / cp_size)
             default_max_tokens = max_seq_len - splited_prompt_len - query_token_len
             if default_max_tokens <= 0:
-                logger.warning(
-                    f"`default_max_tokens` ({default_max_tokens}) should be greater than 0, "
+                # Raise error on `default_max_tokens` not enough, since max_tokens should be less than `default_max_tokens``
+                raise ValueError(
+                    f"`default_max_tokens` ({default_max_tokens}) must be greater than 0, "
                     f"`default_max_tokens` ({default_max_tokens}) = max_seq_len ({max_seq_len})"
                     f" - `splited_prompt_len` ({splited_prompt_len}) - `query_token_len` ({query_token_len})"
                 )
-                if max_tokens is None:
-                    raise ValueError(
-                        "`max_tokens` must be set when `default_max_tokens` is illegal"
-                    )
+
             # default_max_tokens is the biggest available value
             if max_tokens is None:
                 return default_max_tokens
-            elif max_tokens > default_max_tokens:
+            elif max_tokens > default_max_tokens and default_max_tokens > 0:
                 logger.warning(
                     f"User-specified `max_tokens` ({max_tokens}) is greater than deduced "
                     f"`default_max_tokens` ({default_max_tokens}), using default_max_tokens instead."
                 )
                 return default_max_tokens
-            return max_tokens
+            elif max_tokens <= 0:
+                raise ValueError(
+                    f"`max_tokens` ({max_tokens}) must be greater than 0")
+            else:
+                return max_tokens
 
         try:
             executor_request = tllm.Request(
@@ -459,7 +542,8 @@ class BaseWorker(GenerationExecutor):
                 guided_decoding_params=request.sampling_params.
                 _get_guided_decoding_params(),
                 bad_words=request.sampling_params._get_bad_words(),
-                stop_words=request.sampling_params._get_stop_words(),
+                stop_words=[] if request.sampling_params.ignore_eos else
+                request.sampling_params._get_stop_words(),
                 embedding_bias=request.sampling_params.embedding_bias,
                 lora_config=lora_config,
                 prompt_tuning_config=prompt_tuning_config,
@@ -476,10 +560,15 @@ class BaseWorker(GenerationExecutor):
                 kv_cache_retention_config=request.kv_cache_retention_config,
                 context_phase_params=context_phase_params,
                 type=request_type,
-                cache_salt_id=request.cache_salt_id)
+                cache_salt_id=request.cache_salt_id,
+                disagg_request_id=disagg_request_id)
             executor_request.py_num_logprobs = request.sampling_params.logprobs
             executor_request.py_lora_path = py_lora_path
+            executor_request.py_logprobs_mode = request.sampling_params.logprobs_mode
 
+            # here we add executor_request.py_disaggregated_params= request.disaggregated_params for python cache transceiver
+            if self._is_pytorch_backend and request.disaggregated_params is not None:
+                executor_request.py_disaggregated_params = request.disaggregated_params
             if self._is_pytorch_backend and request.multimodal_params is not None:
                 if request.multimodal_params.multimodal_data is not None:
                     # NOTE: Deserialize SharedTensor handle to actual tensor

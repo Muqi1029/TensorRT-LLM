@@ -51,6 +51,11 @@ class Buffers:
 
     def get_buffer(self, tensor_shape: list[int], dtype: torch.dtype,
                    buffer_name: str, reserve_buffer: bool):
+        """Return a reusable buffer view for the requested shape/dtype.
+        The returned tensor is backed by an underlying `torch.uint8` buffer. When
+        no suitable buffer exists in the pool, a new tensor is created via
+        `torch.empty`, so its contents are uninitialized. Overwrite the data before use if needed.
+        """
 
         # all buffers are allocated with 1 byte element size
         required_memory_size = math.prod(tensor_shape) * dtype.itemsize
@@ -74,16 +79,20 @@ class Buffers:
                 best_fit_block = block
                 smallest_sufficient_size = block.buffer.numel()
 
-        if reserve_buffer and best_fit_block is not None:
+        if best_fit_block is not None:
+            if reserve_buffer:
+                best_fit_block.is_reserved = True
             # A suitable buffer was found, so reuse it.
-            best_fit_block.is_reserved = True
             return self._view_as(best_fit_block.buffer, tensor_shape, dtype)
 
         for block in list(candidate_blocks):
             if not block.is_reserved:
                 # Need to call del BufferBlock.buffer, otherwise memory isn't
                 # released and OOM may happen.
+                buffer_size = block.buffer.numel()
                 del block.buffer
+                if buffer_size >= 1024 * 1024 * 1024:
+                    torch.cuda.empty_cache()
                 candidate_blocks.remove(block)
 
         # No suitable buffer was found, so allocate a new one.
@@ -91,7 +100,7 @@ class Buffers:
         new_buffer_tensor = None
         try:
             with torch.cuda.memory.use_mem_pool(get_shared_pool()):
-                new_buffer_tensor = torch.zeros((required_memory_size, ),
+                new_buffer_tensor = torch.empty((required_memory_size, ),
                                                 device='cuda',
                                                 dtype=torch.uint8)
         except Exception as ex:
@@ -101,7 +110,7 @@ class Buffers:
             )
             # if exception happens during allocating memory from shared pool, retry
             # to allocate from default pool
-            new_buffer_tensor = torch.zeros((required_memory_size, ),
+            new_buffer_tensor = torch.empty((required_memory_size, ),
                                             device='cuda',
                                             dtype=torch.uint8)
 

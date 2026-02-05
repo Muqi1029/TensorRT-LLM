@@ -1,3 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 """The model factory interface used by auto-deploy to build custom models."""
 
 import copy
@@ -10,9 +26,6 @@ import torch.nn as nn
 from torch._prims_common import DeviceLikeType
 from torch.export import Dim
 from torch.fx import GraphModule
-
-from ..custom_ops.attention_interface import CacheConfig
-from ..utils.logger import ad_logger
 
 DynamicShape = Dict[int, Dim]  # indicating the dynamic shape in tensor dimension
 
@@ -194,13 +207,15 @@ class ModelFactory(ABC):
         """Returns the sharding config for this model."""
         return self._sharding_config
 
-    def get_cache_config(self) -> CacheConfig:
-        """Return the cache configuration for the model.
+    def get_cache_config_updates(self) -> Dict[str, Any]:
+        """Return updates for the KVCacheConfig for the model.
 
         Returns:
-            The cache configuration for the model.
+            A dictionary of updates for the KVCacheConfig for the model.
+
+        Check tensorrt_llm/llmapi/llm_args.py for the KVCacheConfig fields.
         """
-        return CacheConfig()
+        return {}
 
     def init_tokenizer(self) -> Optional[Any]:
         """Initialize the tokenizer for the model.
@@ -284,12 +299,11 @@ class ModelFactory(ABC):
                     <SIZE_OF_LARGEST_CHECKPOINT_FILE>
 
         """
-        ad_logger.info("Loading and initializing weights.")
         self._to_maybe_random(model, device)
+
         if not self.skip_loading_weights:
             self.prefetch_checkpoint(force=True)
             self._load_checkpoint(model, device)
-        ad_logger.info("Loading and initializing weights. Done.")
 
     @staticmethod
     def _to_maybe_random(model: nn.Module, device: DeviceLikeType):

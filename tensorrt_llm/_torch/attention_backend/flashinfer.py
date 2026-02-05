@@ -56,7 +56,10 @@ class FlashInferWrappers:
 class FlashInferAttentionMetadata(AttentionMetadata):
     workspace_buffer: Optional[torch.Tensor] = None
 
-    kv_layout: Literal["NHD", "HND"] = "NHD"
+    # cache concat/split kernels when using PD disaggregation
+    # expects KV cache in [max_num_pages, 2, num_kv_heads, page_size, head_dim] layout,
+    # so set kv_layout as "HND" here
+    kv_layout: Literal["NHD", "HND"] = "HND"
 
     paged_kv_indptr_decode: torch.Tensor = field(init=False)
     paged_kv_indptr_prefill: torch.Tensor = field(init=False)
@@ -127,7 +130,7 @@ class FlashInferAttentionMetadata(AttentionMetadata):
         self._post_init_with_buffers(self.cuda_graph_buffers)
 
     def _post_init_with_buffers(self, buffers) -> None:
-        capture_graph = torch.cuda.is_current_stream_capturing()
+        capture_graph = self.is_cuda_graph
 
         if self.workspace_buffer is None:
             # Note: even though flashinfer only recommends 128 MB, we have to push it
@@ -422,6 +425,8 @@ class FlashInferAttentionMetadata(AttentionMetadata):
                 paged_kv_indices_buffer=self._paged_kv_indices,
                 paged_kv_last_page_len_buffer=self._paged_kv_last_page_len,
                 use_tensor_cores=use_tensor_cores,
+                backend="fa2"
+                if torch.cuda.get_device_capability(0) == (9, 0) else "auto",
             )
 
         def decode_plan():
@@ -506,7 +511,8 @@ class FlashInferAttention(AttentionBackend[FlashInferAttentionMetadata]):
         q = q.view(-1, self.num_heads, self.head_dim)
 
         # Key and Value
-        kv_cache = metadata.kv_cache_manager.get_buffers(self.layer_idx)
+        kv_cache = metadata.kv_cache_manager.get_buffers(
+            self.layer_idx, kv_layout=metadata.kv_layout)
 
         if k is not None and v is not None:
             k = k.view(-1, self.num_kv_heads, self.head_dim)
