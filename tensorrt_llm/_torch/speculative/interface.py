@@ -1,6 +1,7 @@
 import copy
 import os
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import IntEnum, auto
 from typing import TYPE_CHECKING, List, Optional, Type
@@ -11,10 +12,11 @@ from torch import nn
 from tensorrt_llm.logger import logger
 
 from ..._utils import get_sm_version
-from ..attention_backend.trtllm import AttentionBackend, TrtllmAttention
-from ..cute_dsl_kernels.argmax import argmax as cute_argmax
+from ..attention_backend.trtllm import (AttentionBackend, TrtllmAttention,
+                                        TrtllmAttentionMetadata)
 from ..flashinfer_utils import IS_FLASHINFER_AVAILABLE
-from ..pyexecutor.resource_manager import BaseResourceManager
+from ..pyexecutor.resource_manager import (BaseResourceManager,
+                                           ResourceManagerType)
 
 if TYPE_CHECKING:
     from ..pyexecutor.guided_decoder import CapturableGuidedDecoder
@@ -24,6 +26,17 @@ if IS_FLASHINFER_AVAILABLE:
 
 # Environment variable name for forcing the number of accepted tokens in speculative decoding
 FORCE_NUM_ACCEPTED_TOKENS_ENV_VAR = "TLLM_SPEC_DECODE_FORCE_NUM_ACCEPTED_TOKENS"
+
+
+def should_use_separate_draft_kv_cache(spec_config) -> bool:
+    """
+    Check if separate draft KV cache should be used for one-engine speculative decoding.
+    """
+    if spec_config is None:
+        return False
+    if not spec_config.spec_dec_mode.use_one_engine():
+        return False
+    return spec_config._allow_separate_draft_kv_cache
 
 
 def get_force_num_accepted_tokens() -> int:
@@ -132,9 +145,8 @@ class SpeculativeDecodingMode(IntEnum):
         ) or self.is_eagle3_one_model()
 
     def has_spec_drafter(self):
-        return self.is_eagle3(
-        ) or self.is_draft_target() or self.is_ngram() or self.is_user_provided(
-        ) or self.is_mtp_eagle() or self.is_save_hidden_states()
+        return self.is_eagle3() or self.is_draft_target() or self.is_ngram(
+        ) or self.is_user_provided() or self.is_mtp_eagle()
 
     def extend_ctx(self, attention_backend: Type[AttentionBackend]):
         """
@@ -168,8 +180,7 @@ class SpeculativeDecodingMode(IntEnum):
         is_trtllm_attention = issubclass(attention_backend, TrtllmAttention)
 
         # Always use the multi-token query mode for 1-model if the kernels are available.
-        xqa_supported = get_sm_version() < 120
-        use_case_1 = self.use_one_engine() and xqa_supported
+        use_case_1 = self.use_one_engine()
         # For 2-model, we need to enable it when we process multiple tokens at once. This occurs with
         # the target model (verification) or on the first draft for CDL based speculation.
         use_case_2 = not self.use_one_engine() and (
@@ -372,13 +383,14 @@ class SpecWorkerBase(nn.Module, ABC):
     Provides common functionality for sampling and token handling.
     """
 
-    def __init__(self):
+    def __init__(self, use_separate_draft_kv_cache: bool = False):
         super().__init__()
         self.guided_decoder: Optional["CapturableGuidedDecoder"] = None
         self.force_num_accepted_tokens = get_force_num_accepted_tokens()
-        self.use_flashinfer = IS_FLASHINFER_AVAILABLE and flashinfer.__version__ >= "0.6.0"
-        self.seed = 0
-        self.offset = 0
+        self.use_flashinfer = IS_FLASHINFER_AVAILABLE and flashinfer.__version__ >= "0.6.4"
+        self.seed: Optional[torch.Tensor] = None
+        self.offset: Optional[torch.Tensor] = None
+        self.use_separate_draft_kv_cache = use_separate_draft_kv_cache
 
     @property
     @abstractmethod
@@ -535,8 +547,7 @@ class SpecWorkerBase(nn.Module, ABC):
         Returns:
             draft_tokens: [num_tokens] - Sampled draft token ids (int32)
         """
-        # cute_argmax returns (M, 2) where col 0 = max value, col 1 = argmax index
-        draft_tokens = cute_argmax(logits)[:, 1].long()
+        draft_tokens = torch.argmax(logits, dim=-1)
 
         # Apply d2t (offsets between draft and target model dictionaries)
         if d2t is not None:
@@ -587,14 +598,63 @@ class SpecWorkerBase(nn.Module, ABC):
         Returns:
             input_ids_ctx: Prepared context input IDs
         """
-        input_prompt_ids = input_ids[:num_ctx_tokens]
-        input_ids_ctx = torch.empty_like(input_prompt_ids,
-                                         dtype=torch.int32,
-                                         device="cuda")
-        input_ids_ctx[:-1].copy_(input_prompt_ids[1:])
-        input_ids_ctx[
-            gather_ids[:num_contexts]] = accepted_tokens[:num_contexts, 0]
-        return input_ids_ctx
+        if num_ctx_tokens > 0:
+            input_prompt_ids = input_ids[:num_ctx_tokens]
+            input_ids_ctx = torch.empty_like(input_prompt_ids,
+                                             dtype=torch.int32,
+                                             device="cuda")
+            input_ids_ctx[:-1].copy_(input_prompt_ids[1:])
+            input_ids_ctx[
+                gather_ids[:num_contexts]] = accepted_tokens[:num_contexts, 0]
+            return input_ids_ctx
+        else:
+            return torch.empty(0, dtype=torch.int32, device="cuda")
+
+    def get_draft_kv_cache_manager(self, resource_manager):
+        """
+        Get the draft KV cache manager if using separate KV cache layouts.
+        """
+        if self.use_separate_draft_kv_cache and resource_manager is not None:
+            return resource_manager.get_resource_manager(
+                ResourceManagerType.DRAFT_KV_CACHE_MANAGER)
+        return None
+
+    @contextmanager
+    def draft_kv_cache_context(self, attn_metadata, draft_kv_cache_manager):
+        """
+        Context manager to temporarily switch to draft KV cache manager in one-engine speculative decoding.
+
+        This swaps both the kv_cache_manager reference AND the block offset tensors,
+        since the target and draft KV caches have different block layouts.
+        """
+
+        # draft_kv_cache_manager is None if using two-engine speculative decoding or not enabling separate draft KV cache.
+        if draft_kv_cache_manager is None:
+            yield
+            return
+
+        # Only TrtllmAttentionMetadata supports separate draft KV cache layouts
+        if not isinstance(attn_metadata, TrtllmAttentionMetadata):
+            yield
+            return
+
+        # Save main KV cache manager and block offsets
+        target_kv_cache_manager = attn_metadata.kv_cache_manager
+        target_kv_cache_block_offsets = attn_metadata.kv_cache_block_offsets
+        target_host_kv_cache_block_offsets = attn_metadata.host_kv_cache_block_offsets
+
+        # Switch to draft KV cache manager and its block offsets
+        attn_metadata.kv_cache_manager = draft_kv_cache_manager
+        attn_metadata.kv_cache_block_offsets = attn_metadata.draft_kv_cache_block_offsets
+        attn_metadata.host_kv_cache_block_offsets = draft_kv_cache_manager.host_kv_cache_block_offsets
+
+        try:
+            yield
+        finally:
+            # Restore main KV cache manager and block offsets
+            attn_metadata.kv_cache_manager = target_kv_cache_manager
+            attn_metadata.kv_cache_block_offsets = target_kv_cache_block_offsets
+            attn_metadata.host_kv_cache_block_offsets = target_host_kv_cache_block_offsets
 
     def _sample_tokens_for_batch(
         self,
@@ -627,7 +687,16 @@ class SpecWorkerBase(nn.Module, ABC):
             top_ps = spec_metadata.top_ps[:num_tokens]
 
             if self.use_flashinfer:
+                # Lazily initialize seed/offset tensors on correct device
+                if self.seed is None:
+                    self.seed = torch.tensor([0],
+                                             dtype=torch.int64,
+                                             device=logits.device)
+                    self.offset = torch.tensor([0],
+                                               dtype=torch.int64,
+                                               device=logits.device)
                 self.seed += 1
+                self.seed %= (2**31)
 
             sampled_tokens = sampling_batch_spec_dec_one_model(
                 logits,
@@ -638,7 +707,6 @@ class SpecWorkerBase(nn.Module, ABC):
                 seed=self.seed,
                 offset=self.offset)
         else:
-            # cute_argmax returns (M, 2) where col 0 = max value, col 1 = argmax index
-            sampled_tokens = cute_argmax(logits)[:, 1].long()
+            sampled_tokens = torch.argmax(logits, dim=-1)
 
         return sampled_tokens

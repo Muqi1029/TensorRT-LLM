@@ -87,10 +87,12 @@ roles = (Role.KEY, Role.VALUE, Role.KEY_BLOCK_QUANT, Role.VALUE_BLOCK_QUANT)
 
 class FakeEngine:
     cfg: KVCacheManagerConfig
+    num_heads: int
 
-    def __init__(self, config: KVCacheManagerConfig) -> None:
+    def __init__(self, config: KVCacheManagerConfig, num_heads: int = 1) -> None:
         super().__init__()
         self.cfg = config
+        self.num_heads = num_heads
 
     @property
     def tokens_per_block(self) -> int:
@@ -138,7 +140,12 @@ class FakeEngine:
         pool = manager.get_mem_pool_base_address(layer_id, role)
         stride = manager.get_page_stride(layer_id, role)
         lc_id = manager._storage._layer_to_life_cycle_ids[layer_id]
-        pages = kv_cache.get_page_indices(lc_id, beam)
+        base_pages = kv_cache.get_base_page_indices(lc_id, beam)
+        page_scale = manager.get_page_index_scale(layer_id, role)
+        pages = [
+            BAD_PAGE_INDEX if base_page is BAD_PAGE_INDEX else base_page * page_scale
+            for base_page in base_pages
+        ]
         capacity = kv_cache.capacity
         history_len = len(history)
         assert len(history) == history_len
@@ -160,7 +167,18 @@ class FakeEngine:
                 assert kv_cache.history_length != history_len or page == BAD_PAGE_INDEX
             addr = MemAddress(pool + stride * page)
             tokens = history[tokens_per_block * ordinal : tokens_per_block * (ordinal + 1)]
-            check_values(addr, token_bytes, layer_id, buf_id, beam, tokens, stream)
+            head_bytes = exact_div(token_bytes, self.num_heads)
+            check_values(
+                addr,
+                head_bytes,
+                self.num_heads,
+                tokens_per_block,
+                layer_id,
+                buf_id,
+                beam,
+                tokens,
+                stream,
+            )
 
     def _write_new_tokens(
         self,
@@ -181,8 +199,13 @@ class FakeEngine:
         pool = manager.get_mem_pool_base_address(layer_id, role)
         stride = manager.get_page_stride(layer_id, role)
         lc_id = manager._storage._layer_to_life_cycle_ids[layer_id]
-        pages = kv_cache.get_page_indices(lc_id, beam)[
+        base_pages = kv_cache.get_base_page_indices(lc_id, beam)[
             : div_up(history_len + len(input), tokens_per_block)
+        ]
+        page_scale = manager.get_page_index_scale(layer_id, role)
+        pages = [
+            BAD_PAGE_INDEX if base_page is BAD_PAGE_INDEX else base_page * page_scale
+            for base_page in base_pages
         ]
         capacity = kv_cache.capacity
         input_range = (history_len, history_len + len(input))
@@ -200,7 +223,16 @@ class FakeEngine:
             addr = MemAddress(
                 pool + stride * page + token_bytes * (batch_range[0] % tokens_per_block)
             )
-            # print('layer_id={}, buf_id={}, beam={}, i={}, addr={}, tokens={}'.format(
-            #     layer_id, buf_id, beam, i, addr, tokens))
-            fill_values(addr, token_bytes, layer_id, buf_id, beam, tokens, stream)
+            head_bytes = exact_div(token_bytes, self.num_heads)
+            fill_values(
+                addr,
+                head_bytes,
+                self.num_heads,
+                tokens_per_block,
+                layer_id,
+                buf_id,
+                beam,
+                tokens,
+                stream,
+            )
         assert ordinal is None or ordinal + 1 == div_up(input_range[1], tokens_per_block)
