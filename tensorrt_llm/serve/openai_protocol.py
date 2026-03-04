@@ -851,6 +851,16 @@ class ChatCompletionRequest(OpenAIBaseModel):
                 )
         return v
 
+    @model_validator(mode="after")
+    def penalty_reset(self):
+        if self.frequency_penalty < 0:
+            self.frequency_penalty = 0
+        if self.presence_penalty < 0:
+            self.presence_penalty = 0
+        if self.repetition_penalty < 0:
+            self.repetition_penalty = 1
+        return self
+
 
 ResponseInputOutputItem: TypeAlias = Union[ResponseInputItemParam,
                                            ResponseReasoningItem,
