@@ -1,0 +1,1 @@
+polaris-python-bzl==0.0.3 -i https://wg-rocketmq-admin.weizhipin.com/repository/pypi-all/simple
