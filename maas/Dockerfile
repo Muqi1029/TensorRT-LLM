@@ -1,7 +1,7 @@
 FROM harbor.weizhipin.com/arsenal-ai/tensorrt-llm:v1.3.0rc6
 
 ARG FILE_DIR=./maas
-ARG WHEEL_NAME=tensorrt_llm-1.3.0rc7-cp312-cp312-linux_x86_64.whl
+ARG WHEEL_NAME=truncate/tensorrt_llm-1.3.0rc7-cp312-cp312-linux_x86_64.whl
 
 RUN cp /etc/apt/sources.list /etc/apt/sources.list.bak \
     && echo "deb http://mirrors.weizhipin.com/ubuntu/ jammy main restricted universe multiverse" > /etc/apt/sources.list \
@@ -36,6 +36,9 @@ RUN pip install --no-cache-dir -r /requirements.txt
 # Install whls
 COPY ${FILE_DIR}/whls/${WHEEL_NAME} /app/${WHEEL_NAME}
 RUN pip install --no-cache-dir --no-deps --force-reinstall /app/${WHEEL_NAME} && rm /app/${WHEEL_NAME}
+
+# ONLY for truncate mirror
+COPY new2old.json /usr/local/lib/python3.12/dist-packages/
 
 ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/external:/opt/lib
 

@@ -366,26 +366,6 @@ class OpenAIServer:
         if self.generator.args.return_perf_metrics:
             # register /prometheus/metrics
             self.mount_metrics()
-        else:
-            from prometheus_client import CollectorRegistry, Gauge
-            self.registry = CollectorRegistry()
-
-            self.gauge_cpu_mem = Gauge("engine_cpu_mem_usage", "CPU 内存", registry=self.registry)
-            self.gauge_gpu_mem = Gauge("engine_gpu_mem_usage", "GPU 内存", registry=self.registry)
-
-            # self.gauge_prefill_req = Gauge("engine_prefill_requests_count", "Prefill 请求数量", registry=self.registry)
-            # self.gauge_decode_req = Gauge("engine_decode_requests_count", "Decode 请求数量", registry=self.registry)
-            # self.gauge_prefill_tokens = Gauge("engine_prefill_tokens_total", "Prefill token 数", registry=self.registry)
-            # self.gauge_scheduled_req = Gauge("engine_scheduled_requests_count", "已调度请求", registry=self.registry)
-
-            self.gauge_kv_cache_hit_rate = Gauge("engine_kv_cache_hit_rate", "KV Cache 命中率", registry=self.registry)
-            self.gauge_kv_cache_util = Gauge("engine_kv_cache_utilization", "KV Cache 使用率", registry=self.registry)
-
-            # TODO(histogram)
-            # self.gauge_iter_latency = Gauge("engine_iter_latency_ms", "迭代延迟(ms)", registry=self.registry)
-            # self.gauge_queued_req = Gauge("engine_queued_requests_count", "排队请求数", registry=self.registry)
-            # self.gauge_completed_req = Gauge("engine_completed_requests_total", "完成请求数", registry=self.registry)
-            # self.gauge_queue_latency = Gauge("engine_queue_latency_ms", "新请求排队延迟(ms)", registry=self.registry)
 
 
     def mount_metrics(self):
@@ -524,47 +504,11 @@ class OpenAIServer:
         model_list = ModelList(data=[ModelCard(id=self.model)])
         return JSONResponse(content=model_list.model_dump())
 
-    async def fetch_raw_stats(self):
+    async def get_iteration_stats(self) -> JSONResponse:
         stats = []
         async for stat in self.generator.get_stats_async(2):
             stats.append(stat)
         return stats
-
-    async def get_iteration_stats(self) -> JSONResponse:
-        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-
-        # a. 获取最新的 JSON 数据
-        raw_stats = await self.fetch_raw_stats()
-        if not raw_stats:
-            return Response(content="", media_type=CONTENT_TYPE_LATEST)
-
-        s = raw_stats[-1] # 取最新的一条快照
-        print(f"\033[42m {s=} \033[0m")
-
-        # b. 将 JSON 数据填入 Gauge 中
-        self.gauge_cpu_mem.set(s.get("cpuMemUsage", 0))
-        self.gauge_gpu_mem.set(s.get("gpuMemUsage", 0))
-
-        ib = s.get("inflightBatchingStats", {})
-        self.gauge_prefill_req.set(ib.get("numContextRequests", 0))
-        self.gauge_decode_req.set(ib.get("numGenRequests", 0))
-        self.gauge_prefill_tokens.set(ib.get("numCtxTokens", 0))
-        self.gauge_scheduled_req.set(ib.get("numScheduledRequests", 0))
-
-        kv = s.get("kvCacheStats", {})
-        self.gauge_kv_cache_hit_rate.set(kv.get("cacheHitRate", 0))
-        max_blocks = kv.get("maxNumBlocks", 1)
-        used_blocks = kv.get("usedNumBlocks", 0)
-        self.gauge_kv_cache_util.set(used_blocks / max_blocks if max_blocks > 0 else 0)
-
-        self.gauge_iter_latency.set(s.get("iterLatencyMS", 0))
-        self.gauge_queued_req.set(s.get("numQueuedRequests", 0))
-        self.gauge_completed_req.set(s.get("numCompletedRequests", 0))
-        self.gauge_queue_latency.set(s.get("newActiveRequestsQueueLatencyMS", 0))
-
-        prometheus_data = generate_latest(self.registry)
-
-        return Response(content=prometheus_data, media_type=CONTENT_TYPE_LATEST)
 
     async def set_steady_clock_offset(self, offset: Annotated[float, Body(embed=True)]) -> Response:
         self.disagg_server_steady_clock_offset = offset
