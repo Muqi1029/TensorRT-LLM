@@ -4,7 +4,7 @@ set -exuo pipefail
 
 IMAGE="harbor.weizhipin.com/arsenal-ai/maas-tensorrt-llm-shortcut"
 # TAG="v1.2.0rc2-protocol-log"
-TAG="1.3.0rc6-Ada"
+TAG="v1.3.0rc7"
 
-docker build --network=host -t $IMAGE:$TAG --platform=linux/amd64 -f Dockerfile .
+docker build --network=host -t $IMAGE:$TAG --platform=linux/amd64 -f maas/Dockerfile .
 docker push $IMAGE:$TAG
