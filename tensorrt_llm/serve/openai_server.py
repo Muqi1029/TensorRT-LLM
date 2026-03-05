@@ -45,7 +45,7 @@ from tensorrt_llm.serve.chat_utils import (load_chat_template,
                                            parse_chat_messages_coroutines)
 from tensorrt_llm.serve.cluster_storage import create_cluster_storage_client
 from tensorrt_llm.serve.disagg_auto_scaling import DisaggClusterWorker
-from tensorrt_llm.serve.media_storage import MediaStorage
+from tensorrt_llm.serve.media_storage import MediaStorage, resolve_video_format
 from tensorrt_llm.serve.metadata_server import create_metadata_server
 from tensorrt_llm.serve.openai_protocol import (ChatCompletionRequest,
                                                 ChatCompletionResponse,
@@ -731,7 +731,8 @@ class OpenAIServer:
             raise
 
     async def openai_chat(self, request: ChatCompletionRequest, raw_request: Request) -> Response:
-        if os.getenv("DISABLE_LOG", "").strip().lower() not in ["1", "true"]:
+        # ARSENAL LOG
+        if os.getenv("DISABLE_LOG", "false").strip().lower() not in ["1", 'true']:
             logger.info(f"ARSENAL LOG: {request.model_dump_json()}")
 
         def get_role() -> str:
@@ -1514,6 +1515,10 @@ class OpenAIServer:
             # Parse request based on content-type
             request = await self._parse_video_generation_request(raw_request)
 
+            # Resolve the video encode format (mp4/avi/auto)
+            resolved_fmt, resolved_ext = resolve_video_format(
+                request.output_format)
+
             video_id = f"video_{uuid.uuid4().hex}"
             params = parse_visual_gen_params(request, video_id, media_storage_path=str(self.media_storage_path))
             logger.info(f"Generating video: {video_id} with params: {params} and prompt: {request.prompt}")
@@ -1530,17 +1535,22 @@ class OpenAIServer:
                     status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
 
-            MediaStorage.save_video(
+            actual_output_path = MediaStorage.save_video(
                 video=output.video,
-                output_path=self.media_storage_path / f"{video_id}.mp4",
+                output_path=self.media_storage_path / f"{video_id}{resolved_ext}",
                 audio=output.audio,
                 frame_rate=request.fps or params.frame_rate,
+                format=resolved_fmt,
             )
 
+            # Determine media type based on actual output file extension
+            actual_path = Path(actual_output_path)
+            media_type = "video/mp4" if actual_path.suffix == ".mp4" else "video/x-msvideo"
+
             return FileResponse(
-                self.media_storage_path / f"{video_id}.mp4",
-                media_type="video/mp4",
-                filename=f"{video_id}.mp4",
+                actual_output_path,
+                media_type=media_type,
+                filename=actual_path.name,
             )
 
         except ValueError as e:
@@ -1581,7 +1591,7 @@ class OpenAIServer:
                 raise ValueError("'prompt' is required")
 
             # Optional string fields
-            for field in ["model", "size", "negative_prompt"]:
+            for field in ["model", "size", "negative_prompt", "output_format"]:
                 if field in form and form[field]:
                     data[field] = form[field]
 
@@ -1673,6 +1683,10 @@ class OpenAIServer:
     ):
         """Background task to generate video and save to storage."""
         try:
+            # Resolve the video encode format (mp4/avi/auto)
+            resolved_fmt, resolved_ext = resolve_video_format(
+                request.output_format)
+
             if request.negative_prompt is not None:
                 inputs = visual_gen_inputs({"prompt": request.prompt, "negative_prompt": request.negative_prompt})
             else:
@@ -1681,22 +1695,28 @@ class OpenAIServer:
             output = await future.result()
 
             if output.video is None:
-                return self.create_error_response(
-                    message="Video generation failed",
-                    err_type="InternalServerError",
-                    status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-                )
+                # Update job status to failed since we're in a background task
+                job = await VIDEO_STORE.get(video_id)
+                if job:
+                    job.status = "failed"
+                    job.completed_at = int(time.time())
+                    job.error = "Video generation failed: output.video is None"
+                    await VIDEO_STORE.upsert(video_id, job)
+                return
 
-            MediaStorage.save_video(
+            actual_output_path = MediaStorage.save_video(
                 video=output.video,
-                output_path=self.media_storage_path / f"{video_id}.mp4",
+                output_path=self.media_storage_path / f"{video_id}{resolved_ext}",
                 audio=output.audio,
                 frame_rate=request.fps or params.frame_rate,
+                format=resolved_fmt,
             )
             job = await VIDEO_STORE.get(video_id)
             if job:
                 job.status = "completed"
                 job.completed_at = int(time.time())
+                # Store actual file extension in case it differs from requested (.mp4 vs .avi)
+                job.output_path = str(actual_output_path)
                 await VIDEO_STORE.upsert(video_id, job)
 
         except Exception as e:
@@ -1801,12 +1821,24 @@ class OpenAIServer:
                     status_code=HTTPStatus.BAD_REQUEST
                 )
 
-            video_file_name = f"{video_id}.mp4"
-            if os.path.exists(self.media_storage_path / video_file_name):
+            # Try to use stored output path, otherwise check for both .mp4 and .avi
+            video_path = None
+            if job.output_path and os.path.exists(job.output_path):
+                video_path = Path(job.output_path)
+            else:
+                # Fall back to checking common extensions
+                for ext in [".mp4", ".avi"]:
+                    candidate = self.media_storage_path / f"{video_id}{ext}"
+                    if os.path.exists(candidate):
+                        video_path = candidate
+                        break
+
+            if video_path and os.path.exists(video_path):
+                media_type = "video/mp4" if video_path.suffix == ".mp4" else "video/x-msvideo"
                 return FileResponse(
-                    self.media_storage_path / video_file_name,
-                    media_type="video/mp4",
-                    filename=video_file_name,
+                    video_path,
+                    media_type=media_type,
+                    filename=video_path.name,
                 )
             else:
                 return self.create_error_response(
@@ -1847,12 +1879,23 @@ class OpenAIServer:
                     status_code=HTTPStatus.BAD_REQUEST
                 )
 
-            # Delete the video
-            success = await VIDEO_STORE.pop(video_id)
-            video_file_name = f"{video_id}.mp4"
+            # Delete the video file(s) - check for both .mp4 and .avi
+            video_path = None
+            if job.output_path and os.path.exists(job.output_path):
+                video_path = job.output_path
+            else:
+                # Fall back to checking common extensions
+                for ext in [".mp4", ".avi"]:
+                    candidate = self.media_storage_path / f"{video_id}{ext}"
+                    if os.path.exists(candidate):
+                        video_path = candidate
+                        break
 
-            if os.path.exists(self.media_storage_path / video_file_name):
-                os.remove(self.media_storage_path / video_file_name)
+            if video_path and os.path.exists(video_path):
+                os.remove(video_path)
+
+            # Delete from store
+            success = await VIDEO_STORE.pop(video_id)
 
             return JSONResponse(content={"deleted": success is not None})
 
