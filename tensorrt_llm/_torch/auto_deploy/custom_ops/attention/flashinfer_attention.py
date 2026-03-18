@@ -31,6 +31,7 @@ from ..attention_interface import (
     AttentionDescriptor,
     AttentionLayout,
     AttentionRegistry,
+    BatchInfo,
     Constant,
     KVPagedResourceHandler,
     MHACallable,
@@ -119,7 +120,7 @@ class _FlashInferPlanner:
 
         # NOTE (lucaslie): avoid OOM for many cudagraphs,
         # see https://github.com/NVIDIA/TensorRT-LLM/pull/3686
-        self.workspace_buffer = torch.empty(320 * 1024 * 1024, device=device, dtype=torch.uint8)
+        self.workspace_buffer = torch.empty(1024 * 1024 * 1024, device=device, dtype=torch.uint8)
 
         # NOTE (lucaslie): flashinfer fa3 backend has accuracy issue + illegal memory access issues
         # on H100 PCIe, see https://github.com/NVIDIA/TensorRT-LLM/issues/4504
@@ -264,7 +265,8 @@ def prepare_flashinfer_metadata(
     to understand the convention.
     """
     # retrieve host-side metadata
-    num_prefill, num_prefill_tokens, num_decode = batch_info_host.tolist()
+    batch_info = BatchInfo(batch_info_host)
+    num_prefill, num_prefill_tokens, num_decode = batch_info.get_absorbed_info()
     num_seq = num_prefill + num_decode
     num_tokens = num_prefill_tokens + num_decode
 
@@ -304,7 +306,8 @@ def prepare_flashinfer_metadata_host(
     cache_loc_host: torch.Tensor,
     last_page_len_host: torch.Tensor,
 ) -> None:
-    num_prefill, num_prefill_tokens, num_decode = batch_info_host.tolist()
+    batch_info = BatchInfo(batch_info_host)
+    num_prefill, num_prefill_tokens, num_decode = batch_info.get_absorbed_info()
 
     if num_prefill == 0:
         _GlobalFlashInferPlanner.plan_generate_only(
@@ -351,7 +354,8 @@ def flashinfer_mha_with_cache(
     v = v.reshape(b * s, -1, head_dim).contiguous()
 
     # convert to flashinfer-style metadata
-    num_prefill, num_prefill_tokens, num_decode = batch_info_host.tolist()
+    batch_info = BatchInfo(batch_info_host)
+    num_prefill, num_prefill_tokens, num_decode = batch_info.get_absorbed_info()
     num_seq = num_prefill + num_decode
     num_total_tokens = num_prefill_tokens + num_decode
 
@@ -366,10 +370,10 @@ def flashinfer_mha_with_cache(
         v = v.to(torch.float8_e4m3fn)
 
     flashinfer.page.append_paged_kv_cache(
-        append_key=k,
-        append_value=v,
-        batch_indices=flashinfer_batch_indices,
-        positions=flashinfer_positions,
+        append_key=k[:num_total_tokens],
+        append_value=v[:num_total_tokens],
+        batch_indices=flashinfer_batch_indices[:num_total_tokens],
+        positions=flashinfer_positions[:num_total_tokens],
         paged_kv_cache=kv_cache,
         kv_indices=cache_loc,
         kv_indptr=cu_num_pages[: num_seq + 1],
@@ -377,11 +381,8 @@ def flashinfer_mha_with_cache(
         kv_layout=_GlobalFlashInferPlanner.kv_layout,
     )
 
-    # check if we need to re-combine outputs
-    if num_prefill > 0 and num_decode > 0:
-        y = torch.empty_like(q)
-    else:
-        y = None
+    # Pre-allocate output as zeros so padding positions are clean
+    y = torch.zeros_like(q)
 
     # now run split prefill, decode
     if num_prefill > 0:
@@ -414,10 +415,7 @@ def flashinfer_mha_with_cache(
             v_scale=v_scale,
             enable_pdl=get_env_enable_pdl(),
         )
-        if y is not None:
-            y[:num_prefill_tokens] = y_prefill
-        else:
-            y = y_prefill
+        y[:num_prefill_tokens] = y_prefill
 
     if num_decode > 0:
         q_decode = q[num_prefill_tokens:num_total_tokens]
@@ -448,12 +446,9 @@ def flashinfer_mha_with_cache(
             v_scale=v_scale,
             enable_pdl=get_env_enable_pdl(),
         )
-        if y is not None:
-            y[num_prefill_tokens:num_total_tokens] = y_decode
-        else:
-            y = y_decode
+        y[num_prefill_tokens:num_total_tokens] = y_decode
 
-    return y.view(q_shape_og)  # [b,s,n*h_d] or [b,s, n, h_d]
+    return y.view(q_shape_og)
 
 
 @flashinfer_mha_with_cache.register_fake
