@@ -19,13 +19,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+MAAS_TERMINATION_GRACE_SECONDS_DEFAULT = 30
+PRE_STOP_INTERVAL_TIME_DEFAULT = 6
+
 
 def get_pre_stop_timeout() -> int:
-    return int(os.getenv("MAAS_TERMINATION_GRACE_SECONDS", 30))
+    return int(os.getenv("MAAS_TERMINATION_GRACE_SECONDS", MAAS_TERMINATION_GRACE_SECONDS_DEFAULT))
 
 
 def get_pre_interval_time() -> int:
-    return int(os.getenv("PRE_STOP_INTERVAL_TIME", 6))
+    return int(os.getenv("PRE_STOP_INTERVAL_TIME", PRE_STOP_INTERVAL_TIME_DEFAULT))
 
 
 def run():
