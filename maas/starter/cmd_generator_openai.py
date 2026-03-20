@@ -76,7 +76,8 @@ def get_from_env(field_name: str):
     env_name = field_name.upper()
     if value := os.getenv(env_name):
         return value
-    return ARSENAL_DEFAULT_ARGS.get(field_name, None)
+    # fallback to arsenal default args
+    return ARSENAL_DEFAULT_ARGS.get(field_name)
 
 
 def get_model_path():
