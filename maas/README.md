@@ -1,21 +1,23 @@
-# build maas mirror:
 
+# Shortcuts for development, distribution
+
+## build maas mirror
 ```shell
 cd TensorRT-LLM
-./maas/build_image.sh
+./maas/scripts/build_image.sh
 ```
 
 
-# Dev Install
+## Dev Install on L40
 ```shell
 cd TensorRT-LLM
-./maas/install.sh
+./maas/scripts/install.sh
 
 ```
 
-# Distribute
+## Distribute on SM80(A30), SM89(L40), SM90(H20), SM120(5090)
 ```shell
 cd TensorRT-LLM
-./maas/distribute.sh
+./maas/scripts/distribute.sh
 
 ```
