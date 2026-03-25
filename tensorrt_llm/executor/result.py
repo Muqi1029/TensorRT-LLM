@@ -733,7 +733,7 @@ class DetokenizedGenerationResultBase(GenerationResultBase):
                         **kwargs)
                 else:
                     beam_output.text = self.tokenizer.decode([
-                        token_id + 155742 for token_id in beam_output.token_ids
+                        token_id + 151665 for token_id in beam_output.token_ids
                     ], **kwargs)
                     # beam_output.text = self.tokenizer.decode(
                     #     beam_output.token_ids, **kwargs)

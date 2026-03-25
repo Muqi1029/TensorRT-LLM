@@ -1,7 +1,9 @@
-FROM harbor.weizhipin.com/arsenal-ai/tensorrt-llm:v1.3.0rc6
+FROM harbor.weizhipin.com/arsenal-ai/tensorrt-llm:1.3.0rc8
 
+# input args
 ARG FILE_DIR=./maas
-ARG WHEEL_NAME=truncate/tensorrt_llm-1.3.0rc7-cp312-cp312-linux_x86_64.whl
+# rel path to ${FILE_DIR}/whls
+ARG WHEEL_NAME=truncate_c/tensorrt_llm-1.3.0rc9-cp312-cp312-linux_x86_64.whl
 
 RUN cp /etc/apt/sources.list /etc/apt/sources.list.bak \
     && echo "deb http://mirrors.weizhipin.com/ubuntu/ jammy main restricted universe multiverse" > /etc/apt/sources.list \

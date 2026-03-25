@@ -2265,7 +2265,8 @@ void TrtGptModelInflightBatching::updateRequests(ScheduledRequests const& schedu
                 // FIXME(muqi1029@gmail.com): HARDCODE here: map the token back to get correct embeddings
                 // auto const newToken = hostNewOutputTokensData[newTokenIdx];
                 auto newToken = hostNewOutputTokensData[newTokenIdx];
-                newToken += 155742;
+                // newToken += 155742; // this is for b
+                newToken += 151665; // this is for C
                 llmReq->addNewToken(newToken, beam);
                 TLLM_LOG_DEBUG("request ID %ld beam %d newToken %d", llmReq->mRequestId, beam, newToken);
 
