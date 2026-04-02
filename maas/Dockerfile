@@ -1,4 +1,4 @@
-FROM harbor.weizhipin.com/arsenal-ai/tensorrt-llm:v1.3.0rc8
+FROM harbor.weizhipin.com/arsenal-ai/tensorrt-llm:1.3.0rc8
 
 ARG FILE_DIR=./maas
 ARG WHEEL_NAME=tensorrt_llm-1.3.0rc9-cp312-cp312-linux_x86_64.whl
