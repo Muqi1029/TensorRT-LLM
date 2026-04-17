@@ -9,12 +9,17 @@ Tests the new resource handler abstraction for cache management:
 
 import pytest
 import torch
+from _model_test_utils import default_max_num_tokens
 
 from tensorrt_llm._torch.auto_deploy.custom_ops.attention_interface import (
     AttentionDescriptor,
+    CausalConvResourceHandler,
     KVPagedResourceHandler,
     ResourceHandler,
     SequenceInfo,
+    SpecCausalConvResourceHandler,
+    SpecSSMResourceHandler,
+    SSMResourceHandler,
     StateResourceHandler,
     UnpagedResourceHandler,
 )
@@ -47,7 +52,12 @@ def test_paged_handler_allocate_with_blocks(kv_layout):
     """Verify KVPagedResourceHandler.allocate() returns correct shape."""
     handler = KVPagedResourceHandler(8, 64, dtype=torch.float16, kv_layout=kv_layout)
     tokens_per_block = 32
-    seq_info = SequenceInfo(max_seq_len=128, max_batch_size=4, tokens_per_block=tokens_per_block)
+    seq_info = SequenceInfo(
+        max_seq_len=128,
+        max_batch_size=4,
+        max_num_tokens=default_max_num_tokens(128, 4),
+        tokens_per_block=tokens_per_block,
+    )
     seq_info.to("cuda")
     # Set up num_blocks via update_cache_information
     seq_info.update_cache_information(num_blocks=10)
@@ -118,7 +128,9 @@ def test_state_handler_ssm_state_shape():
 def test_state_handler_allocate_creates_tensor():
     """Verify StateResourceHandler.allocate() creates tensor with correct shape."""
     handler = StateResourceHandler(4, 64, 16, dtype=torch.bfloat16)
-    seq_info = SequenceInfo(max_seq_len=128, max_batch_size=4)
+    seq_info = SequenceInfo(
+        max_seq_len=128, max_batch_size=4, max_num_tokens=default_max_num_tokens(128, 4)
+    )
     seq_info.to("cuda")
 
     tensor = handler.allocate(seq_info)
@@ -169,7 +181,11 @@ def test_unpaged_handler_allocate_returns_correct_shape(num_kv_heads, head_dim, 
     max_seq_len = 128
 
     handler = UnpagedResourceHandler(num_kv_heads, head_dim, dtype=dtype)
-    seq_info = SequenceInfo(max_seq_len=max_seq_len, max_batch_size=max_batch_size)
+    seq_info = SequenceInfo(
+        max_seq_len=max_seq_len,
+        max_batch_size=max_batch_size,
+        max_num_tokens=default_max_num_tokens(max_seq_len, max_batch_size),
+    )
     seq_info.to("cuda")
 
     tensor = handler.allocate(seq_info)
@@ -183,7 +199,9 @@ def test_unpaged_handler_allocate_returns_correct_shape(num_kv_heads, head_dim, 
 def test_unpaged_handler_allocate_correct_device():
     """Verify UnpagedResourceHandler allocated tensor is on the correct device."""
     handler = UnpagedResourceHandler(8, 64, dtype=torch.float16)
-    seq_info = SequenceInfo(max_seq_len=128, max_batch_size=4)
+    seq_info = SequenceInfo(
+        max_seq_len=128, max_batch_size=4, max_num_tokens=default_max_num_tokens(128, 4)
+    )
     seq_info.to("cuda")
 
     tensor = handler.allocate(seq_info)
@@ -274,8 +292,6 @@ def test_kv_paged_handler_eq_different_head_dim_or_dtype():
 
 def test_ssm_handler_eq_same_params():
     """Verify SSMResourceHandler __eq__ for same parameters."""
-    from tensorrt_llm._torch.auto_deploy.custom_ops.attention_interface import SSMResourceHandler
-
     h1 = SSMResourceHandler(num_heads=8, head_dim=64, d_state=16, dtype=torch.bfloat16)
     h2 = SSMResourceHandler(num_heads=8, head_dim=64, d_state=16, dtype=torch.bfloat16)
 
@@ -284,8 +300,6 @@ def test_ssm_handler_eq_same_params():
 
 def test_ssm_handler_eq_different_params():
     """Verify SSMResourceHandler __eq__ returns False for different parameters."""
-    from tensorrt_llm._torch.auto_deploy.custom_ops.attention_interface import SSMResourceHandler
-
     h1 = SSMResourceHandler(num_heads=8, head_dim=64, d_state=16, dtype=torch.bfloat16)
     h2 = SSMResourceHandler(
         num_heads=4, head_dim=64, d_state=16, dtype=torch.bfloat16
@@ -306,10 +320,6 @@ def test_ssm_handler_eq_different_params():
 
 def test_conv_handler_eq_same_params():
     """Verify CausalConvResourceHandler __eq__ for same parameters."""
-    from tensorrt_llm._torch.auto_deploy.custom_ops.attention_interface import (
-        CausalConvResourceHandler,
-    )
-
     h1 = CausalConvResourceHandler(conv_dim=256, d_conv=4, dtype=torch.float32)
     h2 = CausalConvResourceHandler(conv_dim=256, d_conv=4, dtype=torch.float32)
 
@@ -318,10 +328,6 @@ def test_conv_handler_eq_same_params():
 
 def test_conv_handler_eq_different_params():
     """Verify CausalConvResourceHandler __eq__ returns False for different parameters."""
-    from tensorrt_llm._torch.auto_deploy.custom_ops.attention_interface import (
-        CausalConvResourceHandler,
-    )
-
     h1 = CausalConvResourceHandler(conv_dim=256, d_conv=4, dtype=torch.float32)
     h2 = CausalConvResourceHandler(conv_dim=512, d_conv=4, dtype=torch.float32)  # diff conv_dim
     h3 = CausalConvResourceHandler(conv_dim=256, d_conv=5, dtype=torch.float32)  # diff d_conv
@@ -330,3 +336,50 @@ def test_conv_handler_eq_different_params():
     assert h1 != h2
     assert h1 != h3
     assert h1 != h4
+
+
+def test_spec_ssm_handler_from_base():
+    """Verify SpecSSMResourceHandler mirrors base SSM dims and remains a distinct type."""
+    base = SSMResourceHandler(num_heads=8, head_dim=64, d_state=16, dtype=torch.bfloat16)
+    spec = SpecSSMResourceHandler.from_base(base)
+    matching_spec = SpecSSMResourceHandler(8, 64, 16, dtype=torch.bfloat16)
+
+    assert base.state_shape == (8, 64, 16)
+    assert spec.state_shape == (8, 64, 16)
+    assert spec.num_heads == base.num_heads
+    assert spec.head_dim == base.head_dim
+    assert spec.d_state == base.d_state
+    assert spec.dtype == base.dtype
+
+    assert isinstance(spec, SpecSSMResourceHandler)
+    assert not isinstance(spec, SSMResourceHandler)
+    assert base != spec
+    assert spec == matching_spec
+
+
+def test_spec_ssm_handler_from_base_none():
+    """Verify SpecSSMResourceHandler.from_base(None) returns None."""
+    assert SpecSSMResourceHandler.from_base(None) is None
+
+
+def test_spec_conv_handler_from_base():
+    """Verify SpecCausalConvResourceHandler mirrors base conv dims and remains a distinct type."""
+    base = CausalConvResourceHandler(conv_dim=256, d_conv=4, dtype=torch.float32)
+    spec = SpecCausalConvResourceHandler.from_base(base)
+    matching_spec = SpecCausalConvResourceHandler(256, 4, dtype=torch.float32)
+
+    assert base.state_shape == (256, 3)
+    assert spec.state_shape == (256, 3)
+    assert spec.conv_dim == base.conv_dim
+    assert spec.d_conv == base.d_conv
+    assert spec.dtype == base.dtype
+
+    assert isinstance(spec, SpecCausalConvResourceHandler)
+    assert not isinstance(spec, CausalConvResourceHandler)
+    assert base != spec
+    assert spec == matching_spec
+
+
+def test_spec_conv_handler_from_base_none():
+    """Verify SpecCausalConvResourceHandler.from_base(None) returns None."""
+    assert SpecCausalConvResourceHandler.from_base(None) is None
