@@ -69,6 +69,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <numeric>
@@ -1700,8 +1701,6 @@ void TrtGptModelInflightBatching::prepareDistGenBufferAndDecoder(RequestVector c
         for (SizeType32 beam = 0; beam < reqBeamWidth; ++beam)
         {
             request->addNewToken(firstGenTokens.at(beam), beam);
-            // std::cout << firstGenTokens.at(beam) << " => " << firstGenTokens.at(beam) + 155742 << std::endl;
-            // request->addNewToken(firstGenTokens.at(beam) + 155742, beam);
         }
     }
 
@@ -2438,8 +2437,19 @@ void TrtGptModelInflightBatching::updateRequests(ScheduledRequests const& schedu
                 // FIXME(muqi1029@gmail.com): HARDCODE here: map the token back to get correct embeddings
                 // auto const newToken = hostNewOutputTokensData[newTokenIdx];
                 auto newToken = hostNewOutputTokensData[newTokenIdx];
-                // newToken += 155742; // this is for b
-                newToken += 151665; // this is for C
+                if (char const* env_p = std::getenv("TRUNCATE_START_TOKEN_ID"))
+                {
+                    int start_token_id = std::atoi(env_p);
+                    if (start_token_id > 0)
+                    {
+                        newToken += start_token_id;
+                    }
+                    else
+                    {
+                        throw std::runtime_error(
+                            "TRUNCATE_STATR_TOKEN_ID must be positive, got: " + std::to_string(start_token_id));
+                    }
+                }
                 llmReq->addNewToken(newToken, beam);
                 TLLM_LOG_DEBUG("request ID %ld beam %d newToken %d", llmReq->mRequestId, beam, newToken);
 
