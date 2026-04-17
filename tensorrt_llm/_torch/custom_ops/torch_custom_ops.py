@@ -1,3 +1,4 @@
+import enum
 import threading
 from functools import lru_cache
 from typing import ClassVar, List, Mapping, Optional, Tuple, Union
@@ -18,9 +19,14 @@ from ..autotuner import (AutoTuner, ConstraintSpec, DistributedTuningStrategy,
                          TuningConfig)
 from ..cublaslt_utils import IS_CUBLASLT_AVAILABLE
 from ..cute_dsl_utils import IS_CUTLASS_DSL_AVAILABLE
+from ..flashinfer_utils import IS_FLASHINFER_AVAILABLE, get_env_enable_pdl
+
+if IS_FLASHINFER_AVAILABLE:
+    from flashinfer.fp4_quantization import nvfp4_quantize as _flashinfer_nvfp4_quantize
 from ..modules.multi_stream_utils import do_multi_stream
 from ..modules.swiglu import silu_and_mul_kernel
-from ..utils import (ActivationType, fp4_scale_infer_shape,
+from ..utils import (ActivationType, deep_gemm_gen_tuning_buckets,
+                     fp4_scale_infer_shape,
                      get_last_power_of_2_num_tokens_buckets,
                      last_positive_power_of_2)
 
@@ -38,6 +44,18 @@ def bmm_out(a: torch.Tensor, b: torch.Tensor, out: torch.Tensor) -> None:
 class MoERunner(TunableRunner):
     # avoid overhead of creating a new runner in forward pass
     runner_dict = dict()
+
+    @staticmethod
+    def clear_all_workspaces():
+        """Release internal GPU workspace buffers from all cached MoE runners.
+
+        Call this to reclaim GPU memory held by the C++ FusedMoeRunner
+        instances. Workspaces are re-allocated automatically on the next
+        run_moe or run_gemm_profile call.
+        """
+        for runner in MoERunner.runner_dict.values():
+            runner.clear_workspaces()
+
     tuning_config = TuningConfig(
         dynamic_tensor_specs=(DynamicTensorSpec(
             0, 0, get_last_power_of_2_num_tokens_buckets,
@@ -1449,14 +1467,7 @@ def _(
     return input.new_empty((M, N), dtype=output_dtype)
 
 
-def deep_gemm_gen_tuning_buckets(x: int):
-    buckets = tuple(range(8, 128, 8))
-    # Clamp x to be between 4096 and 8192.
-    if x >= 128:
-        x = min(x, 8192)
-        x = max(x, 4096)
-        buckets += tuple(range(128, x, 128))
-    return buckets
+# deep_gemm_gen_tuning_buckets is imported from ..utils
 
 
 def _fp8_quantize_1x128_ue8m0(input: torch.Tensor, tactic: int):
@@ -1717,6 +1728,10 @@ def _(
 class AllReduceRunner(TunableRunner):
     _prealloc_lock: ClassVar[threading.Lock] = threading.Lock()
     _prealloc_done: ClassVar[set] = set()
+    # Set from AllReduce.__init__ via extra_attrs when the model is built.
+    _prealloc_max_num_tokens: ClassVar[Optional[int]] = None
+    _prealloc_hidden_size: ClassVar[Optional[int]] = None
+    _prealloc_dtype: ClassVar[Optional[torch.dtype]] = None
     tuning_config = TuningConfig(
         dynamic_tensor_specs=(DynamicTensorSpec(
             0, 0, get_last_power_of_2_num_tokens_buckets(8192),
@@ -1749,7 +1764,10 @@ class AllReduceRunner(TunableRunner):
     def _maybe_preallocate_buffers(cls,
                                    input_tensor: torch.Tensor,
                                    group: List[int],
-                                   do_preparation: bool = False) -> None:
+                                   do_preparation: bool = False,
+                                   max_num_tokens: Optional[int] = None,
+                                   hidden_size: Optional[int] = None,
+                                   dtype: Optional[torch.dtype] = None) -> None:
         if not do_preparation:
             return
         if not hasattr(torch.ops.trtllm, "preallocate_nccl_window_buffer"):
@@ -1764,7 +1782,22 @@ class AllReduceRunner(TunableRunner):
                 # If capture status can't be queried, avoid prealloc to be safe.
                 return
 
-        num_tokens = int(input_tensor.size(0))
+        # If max_num_tokens and hidden_size are provided, pre-allocate at 2x
+        # the model-configured size to give the NCCL window allocator extra
+        # headroom beyond the nominal max shape.  dtype comes from the model
+        # spec; fall back to the actual input tensor's properties when any
+        # value is missing.
+        # The dummy tensor is created here, after the stream-capture guard,
+        # so it is never allocated inside a CUDA graph context.
+        if max_num_tokens is not None and hidden_size is not None:
+            prealloc_input = torch.empty(
+                [2 * max_num_tokens, hidden_size],
+                dtype=dtype if dtype is not None else input_tensor.dtype,
+                device=input_tensor.device)
+        else:
+            prealloc_input = input_tensor
+
+        num_tokens = int(prealloc_input.size(0))
         if num_tokens <= 0:
             return
         group_key = tuple(group)
@@ -1777,7 +1810,6 @@ class AllReduceRunner(TunableRunner):
         logger.debug(
             "[tunable_allreduce] Pre-allocating NCCL window buffers: "
             "tokens=%d group=%s", num_tokens, list(group))
-        prealloc_input = input_tensor
         torch.ops.trtllm.preallocate_nccl_window_buffer(prealloc_input, group,
                                                         2)
 
@@ -1822,16 +1854,21 @@ class AllReduceRunner(TunableRunner):
                                                    OptimizationProfile(),
                                                    **kwargs)
             if AllReduceStrategy.NCCL_SYMMETRIC.value in valid_tactics:
-                self._maybe_preallocate_buffers(input,
-                                                self.group,
-                                                do_preparation=True)
+                self._maybe_preallocate_buffers(
+                    input,
+                    self.group,
+                    do_preparation=True,
+                    max_num_tokens=AllReduceRunner._prealloc_max_num_tokens,
+                    hidden_size=AllReduceRunner._prealloc_hidden_size,
+                    dtype=AllReduceRunner._prealloc_dtype,
+                )
             return input
         if tactic == -1:
-            # tactic == -1 means the autotuner cache missed for this shape,
-            # so we fall back to plain NCCL instead of NCCL_SYMMETRIC.
-            # NCCL_SYMMETRIC requires ncclMemAlloc which can fail asymmetrically
-            # across ranks under OOM, causing a deadlock at ncclCommWindowRegister.
-            tactic = AllReduceStrategy.NCCL.value
+            # tactic == -1 means the autotuner cache missed for this shape;
+            # fall back to NCCL_SYMMETRIC. Asymmetric ncclMemAlloc failures are
+            # handled by a cross-rank barrier in NCCLWindowAllocator, which
+            # falls back to plain NCCL if allocation fails on any rank.
+            tactic = AllReduceStrategy.NCCL_SYMMETRIC.value
 
         return torch.ops.trtllm.allreduce(
             input,
@@ -2224,3 +2261,166 @@ def _(input: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         input.new_empty(input.shape, dtype=torch.float8_e4m3fn),
         input.new_empty(scale_shape, dtype=input.dtype),
     )
+
+
+# =============================================================================
+# Tunable FP4 Quantization: selects between TRTLLM and FlashInfer kernels
+# =============================================================================
+
+
+class Fp4QuantTactic(enum.IntEnum):
+    """FP4 quantization backend selection."""
+
+    TRTLLM = -1
+    FLASHINFER = 1
+
+
+def _fp4_quantize_dispatch(input: torch.Tensor, input_scale: torch.Tensor,
+                           scaling_vector_size: int,
+                           is_sf_swizzled_layout: bool,
+                           tactic: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Dispatch FP4 quantization to TRTLLM or FlashInfer kernel."""
+    if tactic == Fp4QuantTactic.FLASHINFER and IS_FLASHINFER_AVAILABLE:
+        act_fp4, act_sf = _flashinfer_nvfp4_quantize(
+            input,
+            input_scale,
+            do_shuffle=is_sf_swizzled_layout,
+            sf_vec_size=scaling_vector_size,
+            enable_pdl=get_env_enable_pdl(),
+        )
+        # FlashInfer returns 2D act_sf [M_padded, sf_cols] but downstream
+        # (nvfp4_gemm) and the TRTLLM kernel expect 1D flat. Reshape to match.
+        # Use swizzled_layout=True since the C++ kernel always pads M to 128.
+        _, expected_sf_shape = fp4_utils.get_fp4_shape(input.shape,
+                                                       scaling_vector_size,
+                                                       True)
+        act_sf = act_sf.reshape(expected_sf_shape)
+        return act_fp4, act_sf
+    else:
+        return torch.ops.trtllm.fp4_quantize(input, input_scale,
+                                             scaling_vector_size,
+                                             is_sf_swizzled_layout)
+
+
+class Fp4QuantKernelRunner(TunableRunner):
+    """Profiles FP4 quantization kernels: TRTLLM vs FlashInfer.
+
+    Selects between TRTLLM CUDA and FlashInfer quantization backends.
+    Uses empty gen_tuning_buckets so only actual M values are profiled.
+    CUDA graph is disabled for profiling because the FlashInfer TMA
+    kernel may cache internal state (e.g. TMA descriptors) that references
+    memory from the graph pool; after graph destruction, this stale state
+    causes TMA encoding failures on the subsequent real call.
+    """
+
+    tuning_config = TuningConfig(
+        dynamic_tensor_specs=(DynamicTensorSpec(0, 0, ()), ),
+        use_cuda_graph=False,
+    )
+
+    def __init__(self,
+                 scaling_vector_size: int = 16,
+                 is_sf_swizzled_layout: bool = False):
+        self.scaling_vector_size = scaling_vector_size
+        self.is_sf_swizzled_layout = is_sf_swizzled_layout
+
+    def unique_id(self):
+        return (self.scaling_vector_size, self.is_sf_swizzled_layout)
+
+    def get_valid_tactics(
+        self,
+        inputs: List[torch.Tensor],
+        profile: OptimizationProfile,
+    ) -> List[int]:
+        tactics = [Fp4QuantTactic.TRTLLM]
+        if IS_FLASHINFER_AVAILABLE:
+            tactics.append(Fp4QuantTactic.FLASHINFER)
+        return tactics
+
+    def forward(
+        self,
+        inputs: List[torch.Tensor],
+        tactic: int = Fp4QuantTactic.TRTLLM,
+    ) -> torch.Tensor:
+        input, input_scale = inputs
+        act_fp4, act_sf = _fp4_quantize_dispatch(input, input_scale,
+                                                 self.scaling_vector_size,
+                                                 self.is_sf_swizzled_layout,
+                                                 tactic)
+        return act_fp4
+
+
+@torch.library.custom_op("trtllm::tunable_fp4_quantize", mutates_args=())
+def tunable_fp4_quantize(
+    input: torch.Tensor,
+    input_scale: torch.Tensor,
+    scaling_vector_size: int = 16,
+    is_sf_swizzled_layout: bool = False,
+) -> List[torch.Tensor]:
+    """FP4 quantization with autotuning between TRTLLM and FlashInfer kernels.
+
+    During warmup, the AutoTuner profiles both backends and caches the
+    fastest one per input shape. Subsequent calls use the cached selection
+    with zero overhead.
+
+    Args:
+        input: Activation tensor [M, K] in bf16/fp16
+        input_scale: Global scale factor tensor
+        scaling_vector_size: Block size for scale factors (default: 16)
+        is_sf_swizzled_layout: Whether to use swizzled layout for scales
+
+    Returns:
+        List of [act_fp4, act_sf] - quantized activation and scale factors
+    """
+    tuner = AutoTuner.get()
+
+    quant_runner = Fp4QuantKernelRunner(scaling_vector_size,
+                                        is_sf_swizzled_layout)
+
+    _, best_tactic = tuner.choose_one(
+        "trtllm::fp4_quantize_tactic",
+        [quant_runner],
+        Fp4QuantKernelRunner.tuning_config,
+        [input, input_scale],
+    )
+
+    try:
+        act_fp4, act_sf = _fp4_quantize_dispatch(input, input_scale,
+                                                 scaling_vector_size,
+                                                 is_sf_swizzled_layout,
+                                                 best_tactic)
+    except Exception:
+        if best_tactic != Fp4QuantTactic.TRTLLM:
+            logger.warning(f"FlashInfer FP4 quantize failed for input shape "
+                           f"{input.shape}, falling back to TRTLLM kernel.")
+            act_fp4, act_sf = _fp4_quantize_dispatch(input, input_scale,
+                                                     scaling_vector_size,
+                                                     is_sf_swizzled_layout,
+                                                     Fp4QuantTactic.TRTLLM)
+        else:
+            raise
+    return [act_fp4, act_sf]
+
+
+@tunable_fp4_quantize.register_fake
+def _(
+    input: torch.Tensor,
+    input_scale: torch.Tensor,
+    scaling_vector_size: int = 16,
+    is_sf_swizzled_layout: bool = False,
+) -> List[torch.Tensor]:
+    """Fake implementation for torch.compile support.
+
+    Note: The underlying TRTLLM C++ kernel always pads M to 128 for scale
+    factors regardless of the swizzled_layout flag, so we use
+    swizzled_layout=True in get_fp4_shape to match the actual output size.
+    We also reshape FlashInfer's output to match in _fp4_quantize_dispatch.
+    """
+    output_shape, scale_shape = fp4_utils.get_fp4_shape(input.shape,
+                                                        scaling_vector_size,
+                                                        True)
+
+    return [
+        input.new_empty(output_shape, dtype=torch.uint8),
+        input_scale.new_empty(scale_shape, dtype=torch.uint8),
+    ]

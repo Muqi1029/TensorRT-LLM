@@ -37,8 +37,9 @@ from ._util import (KvCacheCreator, _adjust_torch_mem_fraction,
                     create_py_executor_instance, instantiate_sampler, is_mla,
                     validate_feature_combination)
 from .config_utils import is_nemotron_hybrid, is_qwen3_hybrid
+from .connectors.kv_cache_connector import KvCacheConnectorManager
+from .dwdp import DwdpManager
 from .guided_decoder import CapturableGuidedDecoder, GuidedDecoder
-from .kv_cache_connector import KvCacheConnectorManager
 from .model_engine import PyTorchModelEngine
 from .model_loader import ModelLoader, _construct_checkpoint_loader
 from .py_executor import PyExecutor
@@ -284,9 +285,16 @@ def create_py_executor(
         logger.info(
             "Tokenizer not provided; loading from checkpoint for guided decoding"
         )
-        from tensorrt_llm.tokenizer import TransformersTokenizer
-        tokenizer = TransformersTokenizer.from_pretrained(
-            checkpoint_dir, trust_remote_code=llm_args.trust_remote_code)
+        if llm_args.custom_tokenizer:
+            from tensorrt_llm.tokenizer import load_custom_tokenizer
+            tokenizer = load_custom_tokenizer(
+                llm_args.custom_tokenizer,
+                checkpoint_dir,
+                trust_remote_code=llm_args.trust_remote_code)
+        else:
+            from tensorrt_llm.tokenizer import TransformersTokenizer
+            tokenizer = TransformersTokenizer.from_pretrained(
+                checkpoint_dir, trust_remote_code=llm_args.trust_remote_code)
 
     guided_decoding_config = get_guided_decoding_config(
         llm_args.guided_decoding_backend, tokenizer)
@@ -383,6 +391,14 @@ def create_py_executor(
         chunk_size=max_num_tokens,
     )
     logger.info("ATTENTION RUNTIME FEATURES: ", attn_runtime_features)
+
+    # Initialize DWDP Manager (only for context workers in disaggregated serving)
+    dwdp_manager: Optional[DwdpManager] = None
+    if llm_args.dwdp_config is not None:
+        assert mapping.tp_size == 1 and llm_args.dwdp_config.dwdp_size > 1, "DWDP requires TP=1 and dwdp_size > 1"
+        dwdp_manager = DwdpManager(config=llm_args.dwdp_config, dist=dist)
+        dwdp_manager.__enter__()
+        logger.info(f"Dwdp Manager initialized. Config: {llm_args.dwdp_config}")
 
     mem_monitor = _ExecutorMemoryMonitor()
 
@@ -705,13 +721,22 @@ def create_py_executor(
     if model_engine.model.model_config.is_generation:
         #NOTE: non-generation models do not have kv cache
 
-        # Disagg for hybrid models is currently only supported with C++ RnnStateManager
+        # Use C++ MambaCacheManager by default for Disaggregated serving with hybrid model.
         config = model_engine.model.model_config.pretrained_config
-        if cache_transceiver_config is not None and cache_transceiver_config.backend is not None:
-            if is_nemotron_hybrid(config) or is_qwen3_hybrid(config):
+
+        is_disagg = (cache_transceiver_config is not None
+                     and cache_transceiver_config.backend is not None)
+        is_hybrid = is_nemotron_hybrid(config) or is_qwen3_hybrid(config)
+
+        if is_disagg and is_hybrid:
+            if cache_transceiver_config.transceiver_runtime != "PYTHON" or os.environ.get(
+                    "TRTLLM_USE_CPP_MAMBA") == "1":
                 logger.info("Disaggregated serving with hybrid model detected. "
-                            "Enabling C++ MambaCacheManager automatically.")
-                os.environ['TRTLLM_USE_CPP_MAMBA'] = '1'
+                            "Enabling C++ MambaCacheManager.")
+                os.environ["TRTLLM_USE_CPP_MAMBA"] = "1"
+            else:
+                logger.info("Disaggregated serving with hybrid model detected. "
+                            "Enabling Python MambaCacheManager.")
 
         # Get draft config for one-engine speculative decoding if available
         draft_config = getattr(model_engine.model, 'draft_config', None)
@@ -747,6 +772,11 @@ def create_py_executor(
             # Since now, we are changing kv_cache_creator._max_seq_len instead. Restore max_seq_len here.
             max_seq_len = kv_cache_creator._max_seq_len
             update_sampler_max_seq_len(max_seq_len, sampler)
+
+    # Exchange IPC Handles and Initialize Dwdp Prefetch Buffer
+    if dwdp_manager is not None:
+        dwdp_manager.exchange_all_handles()
+        dwdp_manager.initialize_prefetch_buffer()
 
     # Resource managers for speculative decoding
     # For user-specified drafters, use extra_resource_managers in PyTorchBackend config
@@ -865,6 +895,7 @@ def create_py_executor(
                 cache_transceiver_config=cache_transceiver_config,
                 virtual_memory_pools=vm_pools,
                 execution_stream=execution_stream,
+                dwdp_manager=dwdp_manager,
             )
 
     _adjust_torch_mem_fraction()

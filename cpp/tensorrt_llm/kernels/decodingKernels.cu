@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2024, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2026, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -328,10 +328,11 @@ __global__ void insertUnfinishedPathKernel(BeamHypotheses bh)
     // update bh.normedScoresCBA
     // update bh.numBeamsCBA
 
-    size_t const bid = blockIdx.x;       // Index of Batch
-    size_t const nBM{bh.nBeamWidth};
-    size_t const nMBS{bh.nMaxBatchSize}; // Only for bh.logProbsTiled
-    size_t const nMSL{bh.nMaxSeqLen};
+    int const bid = blockIdx.x;          // Index of Batch
+    int const tid = threadIdx.x;         // Index of thread in block
+    int const nBM = static_cast<int>(bh.nBeamWidth);
+    int const nMBS = static_cast<int>(bh.nMaxBatchSize); // Only for bh.logProbsTiled
+    int const nMSL = static_cast<int>(bh.nMaxSeqLen);
     bool const bOutputLogProbs{bh.logProbsCBA != nullptr && bh.logProbsTiled != nullptr};
     int const indexDstStart{bh.numBeamsCBA[bid]};
 
@@ -340,7 +341,7 @@ __global__ void insertUnfinishedPathKernel(BeamHypotheses bh)
         return;
     }
 
-    for (int i = 0; i < nBM; ++i)
+    for (int i = tid; i < nBM; i += blockDim.x)
     {
         int const srcBeam = bid * nBM + i;
         int const dstBeam = bid * nBM * 2 + i + indexDstStart;
@@ -377,13 +378,18 @@ __global__ void insertUnfinishedPathKernel(BeamHypotheses bh)
         bh.normedScoresCBA[dstBeam]
             = applyLengthPenalty(bh.cumLogProbs[srcBeam], step - bh.inputLengths[srcBeam] + 1, bh.lengthPenalties[bid]);
         bh.cumLogProbsCBA[dstBeam] = bh.cumLogProbs[srcBeam];
-        bh.numBeamsCBA[bid]++;
+    }
+
+    if (tid == 0)
+    {
+        bh.numBeamsCBA[bid] = indexDstStart + nBM;
     }
 }
 
 void invokeInsertUnfinishedPath(BeamHypotheses& bh, cudaStream_t stream)
 {
-    insertUnfinishedPathKernel<<<bh.nBatchSize, 1, 0, stream>>>(bh);
+    int const nThread = static_cast<int>(bh.nBeamWidth > 256 ? 256 : bh.nBeamWidth);
+    insertUnfinishedPathKernel<<<bh.nBatchSize, nThread, 0, stream>>>(bh);
 }
 
 __global__ void finalizeKernel(BeamHypotheses bh)
